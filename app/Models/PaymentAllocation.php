@@ -9,11 +9,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class InvoiceItem extends Model
+class PaymentAllocation extends Model
 {
     use HasFactory, HasUlids;
 
-    protected $table = 'invoice_items';
+    protected $table = 'payment_allocations';
 
     protected $keyType = 'string';
 
@@ -24,11 +24,13 @@ class InvoiceItem extends Model
     protected function casts(): array
     {
         return [
-            'quantity' => 'decimal:6',
-            'unit_price' => 'decimal:4',
-            'tax_rate' => 'decimal:6',
-            'total' => 'decimal:4',
+            'amount' => 'decimal:4',
         ];
+    }
+
+    public function payment(): BelongsTo
+    {
+        return $this->belongsTo(Payment::class);
     }
 
     public function invoice(): BelongsTo

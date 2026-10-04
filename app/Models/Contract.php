@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+
 class Contract extends Model
 {
     use HasFactory, HasUlids;
@@ -48,5 +49,14 @@ class Contract extends Model
     public function invoices(): HasMany
     {
         return $this->hasMany(Invoice::class);
+    }
+    public function amendments(): HasMany
+    {
+        return $this->hasMany(ContractAmendment::class);
+    }
+
+    public function workSituations(): HasMany
+    {
+        return $this->hasMany(WorkSituation::class);
     }
 }

@@ -59,4 +59,9 @@ class Party extends Model
             'id',
         );
     }
+
+    public function creditNotes(): HasMany
+    {
+        return $this->hasMany(CreditNote::class, 'client_party_id');
+    }
 }

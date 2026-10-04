@@ -9,11 +9,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class InvoiceItem extends Model
+class CreditNoteItem extends Model
 {
     use HasFactory, HasUlids;
 
-    protected $table = 'invoice_items';
+    protected $table = 'credit_note_items';
 
     protected $keyType = 'string';
 
@@ -31,8 +31,8 @@ class InvoiceItem extends Model
         ];
     }
 
-    public function invoice(): BelongsTo
+    public function creditNote(): BelongsTo
     {
-        return $this->belongsTo(Invoice::class);
+        return $this->belongsTo(CreditNote::class);
     }
 }
