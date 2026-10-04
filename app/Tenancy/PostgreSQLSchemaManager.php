@@ -9,6 +9,10 @@ use Stancl\Tenancy\TenantDatabaseManagers\PostgreSQLSchemaManager as BasePostgre
 
 class PostgreSQLSchemaManager extends BasePostgreSQLSchemaManager
 {
+    /**
+     * @param array<string, mixed> $baseConfig
+     * @return array<string, mixed>
+     */
     public function makeConnectionConfig(array $baseConfig, string $databaseName): array
     {
         $baseConfig['search_path'] = $databaseName.',public';

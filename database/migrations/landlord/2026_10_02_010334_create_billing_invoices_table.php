@@ -18,9 +18,9 @@ return new class extends Migration
 
             $table->string('status');
 
-            $table->decimal('subtotal', 15, 2)->default(0);
-            $table->decimal('tax', 15, 2)->default(0);
-            $table->decimal('total', 15, 2)->default(0);
+            $table->decimal('subtotal', 20, 4)->default(0);
+            $table->decimal('tax', 20, 4)->default(0);
+            $table->decimal('total', 20, 4)->default(0);
 
             $table->char('currency', 3)->default('XOF');
 

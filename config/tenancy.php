@@ -57,6 +57,11 @@ return [
         'prefix' => 'tenant',
         'suffix' => '',
 
+        /*
+        * V1: PostgreSQL schema-per-tenant.
+        */
+        'separate_by' => 'schema',
+
         /**
          * TenantDatabaseManagers are classes that handle the creation & deletion of tenant databases.
          */
@@ -78,6 +83,15 @@ return [
          */
             // 'pgsql' => Stancl\Tenancy\TenantDatabaseManagers\PostgreSQLSchemaManager::class, // Separate by schema instead of database
             'pgsql' => App\Tenancy\PostgreSQLSchemaManager::class,
+        ],
+
+    /*
+     * Connection used by each tenant database manager.
+     */
+        'database_manager_connections' => [
+            'sqlite' => 'sqlite',
+            'mysql' => 'mysql',
+            'pgsql' => 'pgsql',
         ],
     ],
 

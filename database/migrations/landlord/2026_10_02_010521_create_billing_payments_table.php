@@ -15,7 +15,7 @@ return new class extends Migration
 
             $table->ulid('invoice_id');
 
-            $table->decimal('amount', 15, 2);
+            $table->decimal('amount', 20, 4);
             $table->char('currency', 3)->default('XOF');
 
             $table->string('method');

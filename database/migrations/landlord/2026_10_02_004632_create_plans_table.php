@@ -20,7 +20,7 @@ return new class extends Migration
             $table->string('slug')->unique();
             $table->text('description')->nullable();
 
-            $table->decimal('price', 15, 2)->default(0);
+            $table->decimal('price', 20, 4)->default(0);
             $table->char('currency', 3)->default('XOF');
 
             /*

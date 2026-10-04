@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Models\Tenant;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Stancl\JobPipeline\JobPipeline;
 use Stancl\Tenancy\Contracts\TenantWithDatabase;
 use Stancl\Tenancy\DatabaseConfig;
 use Stancl\Tenancy\Events;
+use Stancl\Tenancy\Jobs\CreateDatabase;
+use Stancl\Tenancy\Jobs\MigrateDatabase;
 use Stancl\Tenancy\Listeners;
 
 class TenancyServiceProvider extends ServiceProvider
@@ -22,7 +26,13 @@ class TenancyServiceProvider extends ServiceProvider
     {
         DatabaseConfig::generateDatabaseNamesUsing(
             static function (TenantWithDatabase $tenant): string {
-                return $tenant->getAttribute('schema_name');
+                if (! $tenant instanceof Tenant) {
+                    throw new \LogicException(
+                        'The configured tenancy tenant model must be '.Tenant::class.'.'
+                    );
+                }
+
+                return $tenant->getSchemaName();
             }
         );
 
@@ -31,6 +41,19 @@ class TenancyServiceProvider extends ServiceProvider
 
     protected function bootEvents(): void
     {
+        Event::listen(
+            Events\TenantCreated::class,
+            JobPipeline::make([
+                CreateDatabase::class,
+                MigrateDatabase::class,
+            ])
+                ->send(function (Events\TenantCreated $event) {
+                    return $event->tenant;
+                })
+                ->shouldBeQueued(false)
+                ->toListener(),
+        );
+
         Event::listen(
             Events\TenancyInitialized::class,
             Listeners\BootstrapTenancy::class,

@@ -17,6 +17,7 @@ use Laravel\Fortify\Contracts\PasskeyUser;
 use Laravel\Fortify\PasskeyAuthenticatable;
 use Laravel\Fortify\TwoFactorAuthenticatable;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Spatie\Permission\Traits\HasRoles;
 
 /**
  * @property string $id
@@ -43,7 +44,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, HasUlids, Notifiable,  PasskeyAuthenticatable, TwoFactorAuthenticatable; // phpcs:ignore PSR12.Traits.UseDeclaration.MultipleImport
+    use HasFactory, HasRoles, HasUlids, Notifiable, PasskeyAuthenticatable, TwoFactorAuthenticatable; // phpcs:ignore PSR12.Traits.UseDeclaration.MultipleImport
 
     protected $keyType = 'string';
 

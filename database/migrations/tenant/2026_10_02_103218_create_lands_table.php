@@ -29,7 +29,7 @@ return new class extends Migration
             $table->ulid('owner_party_id')->nullable();
 
             $table->date('acquisition_date')->nullable();
-            $table->decimal('acquisition_cost', 15, 2)->nullable();
+            $table->decimal('acquisition_cost', 20, 4)->nullable();
 
             $table->timestampsTz();
             $table->softDeletesTz();

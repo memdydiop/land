@@ -4,24 +4,15 @@ declare(strict_types=1);
 
 namespace App\Models;
 
-use Carbon\Carbon;
-use Stancl\Tenancy\Contracts;
-use Stancl\Tenancy\Database\Concerns;
-use Stancl\Tenancy\Database\TenantCollection;
+use Stancl\Tenancy\Contracts\TenantWithDatabase;
+use Stancl\Tenancy\Database\Concerns\HasDatabase;
+use Stancl\Tenancy\Database\Concerns\HasDomains;
+use Stancl\Tenancy\Database\Models\Tenant as BaseTenant;
 use Stancl\Tenancy\Events;
-use Illuminate\Database\Eloquent\Model;
 
-class Tenant extends Model implements Contracts\TenantWithDatabase
+class Tenant extends BaseTenant implements TenantWithDatabase
 {
-    use Concerns\CentralConnection,
-        Concerns\GeneratesIds,
-        Concerns\HasInternalKeys,
-        Concerns\TenantRun,
-        Concerns\InvalidatesResolverCache,
-        Concerns\HasDatabase,
-        Concerns\HasDomains;
-
-    protected static $modelsShouldPreventAccessingMissingAttributes = false;
+    use HasDatabase, HasDomains;
 
     protected $table = 'tenants';
 
@@ -33,6 +24,25 @@ class Tenant extends Model implements Contracts\TenantWithDatabase
 
     protected $guarded = [];
 
+    /**
+     * Columns stored directly in public.tenants instead of the JSON data column.
+     */
+    public static function getCustomColumns(): array
+    {
+        return array_merge(parent::getCustomColumns(), [
+            'name',
+            'slug',
+            'status',
+            'schema_name',
+            'database_identifier',
+            'timezone',
+            'locale',
+            'currency',
+            'trial_ends_at',
+            'suspended_at',
+        ]);
+    }
+
     protected function casts(): array
     {
         return [
@@ -42,19 +52,9 @@ class Tenant extends Model implements Contracts\TenantWithDatabase
         ];
     }
 
-    public function getTenantKeyName(): string
+    public function getSchemaName(): string
     {
-        return 'id';
-    }
-
-    public function getTenantKey()
-    {
-        return $this->getAttribute($this->getTenantKeyName());
-    }
-
-    public function newCollection(array $models = []): TenantCollection
-    {
-        return new TenantCollection($models);
+        return (string) $this->getAttribute('schema_name');
     }
 
     protected $dispatchesEvents = [
@@ -62,7 +62,7 @@ class Tenant extends Model implements Contracts\TenantWithDatabase
         'saved' => Events\TenantSaved::class,
         'creating' => Events\CreatingTenant::class,
         'created' => Events\TenantCreated::class,
-        'updating' => Events\UpdatingTenant::class,
+        'updating' => Events\TenantUpdated::class,
         'updated' => Events\TenantUpdated::class,
         'deleting' => Events\DeletingTenant::class,
         'deleted' => Events\TenantDeleted::class,

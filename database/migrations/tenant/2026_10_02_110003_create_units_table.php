@@ -18,8 +18,8 @@ return new class extends Migration
             $table->decimal('surface', 15, 2)->nullable();
             $table->unsignedSmallInteger('rooms')->nullable();
             $table->string('status');
-            $table->decimal('rent_amount', 15, 2)->nullable();
-            $table->decimal('sale_price', 15, 2)->nullable();
+            $table->decimal('rent_amount', 20, 4)->nullable();
+            $table->decimal('sale_price', 20, 4)->nullable();
             $table->timestampsTz();
 
             $table->unique('reference');

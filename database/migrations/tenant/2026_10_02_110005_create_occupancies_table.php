@@ -17,7 +17,7 @@ return new class extends Migration
             $table->date('start_date');
             $table->date('end_date')->nullable();
             $table->string('status');
-            $table->decimal('amount', 15, 2)->nullable();
+            $table->decimal('amount', 20, 4)->nullable();
             $table->timestampsTz();
 
             $table->foreign('unit_id')

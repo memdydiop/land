@@ -22,7 +22,7 @@ return new class extends Migration
 
             $table->unsignedInteger('quantity')->default(1);
 
-            $table->decimal('unit_price', 15, 2)->default(0);
+            $table->decimal('unit_price', 20, 4)->default(0);
 
             $table->jsonb('metadata')->nullable();
 

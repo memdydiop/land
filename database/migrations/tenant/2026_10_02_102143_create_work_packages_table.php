@@ -25,7 +25,7 @@ return new class extends Migration
 
             $table->unsignedSmallInteger('progress')->default(0);
 
-            $table->decimal('budget_amount', 15, 2)->nullable();
+            $table->decimal('budget_amount', 20, 4)->nullable();
 
             $table->date('start_date')->nullable();
             $table->date('end_date')->nullable();

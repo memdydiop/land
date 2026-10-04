@@ -9,7 +9,7 @@ use Stancl\Tenancy\Contracts\UniqueIdentifierGenerator;
 
 final class UlidGenerator implements UniqueIdentifierGenerator
 {
-    public static function generate($resource): string
+    public static function generate(mixed $resource): string
     {
         return (string) Str::ulid();
     }
