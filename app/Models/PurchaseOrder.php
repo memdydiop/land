@@ -36,9 +36,9 @@ class PurchaseOrder extends Model
             'status' => PurchaseOrderStatus::class,
             'order_date' => 'date',
             'expected_date' => 'date',
-            'subtotal' => 'decimal:2',
-            'tax' => 'decimal:2',
-            'total' => 'decimal:2',
+            'subtotal' => 'decimal:4',
+            'tax' => 'decimal:4',
+            'total' => 'decimal:4',
         ];
     }
 

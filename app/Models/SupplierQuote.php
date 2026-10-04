@@ -35,9 +35,9 @@ class SupplierQuote extends Model
             'status' => SupplierQuoteStatus::class,
             'quote_date' => 'date',
             'valid_until' => 'date',
-            'subtotal' => 'decimal:2',
-            'tax' => 'decimal:2',
-            'total' => 'decimal:2',
+            'subtotal' => 'decimal:4',
+            'tax' => 'decimal:4',
+            'total' => 'decimal:4',
         ];
     }
 
