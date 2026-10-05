@@ -1,6 +1,7 @@
 <?php
 
 use Laravel\Fortify\Features;
+use Stancl\Tenancy\Middleware\InitializeTenancyByDomain;
 
 return [
 
@@ -101,7 +102,11 @@ return [
     |
     */
 
-    'middleware' => ['web'],
+    'middleware' => [
+    'web',
+    'universal',
+    InitializeTenancyByDomain::class,
+],
 
     /*
     |--------------------------------------------------------------------------
