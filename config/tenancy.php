@@ -24,6 +24,8 @@ return [
         'localhost',
     ],
 
+    'land_domain' => env('LAND_DOMAIN', 'land.ci'),
+
     /**
      * Tenancy bootstrappers are executed when tenancy is initialized.
      * Their responsibility is making Laravel features tenant-aware.
