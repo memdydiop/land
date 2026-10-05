@@ -9,6 +9,7 @@ use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
 use Stancl\JobPipeline\JobPipeline;
 use Stancl\Tenancy\Contracts\TenantWithDatabase;
 use Stancl\Tenancy\DatabaseConfig;
@@ -47,6 +48,16 @@ class TenancyServiceProvider extends ServiceProvider
         );
 
         $this->bootEvents();
+
+        Livewire::setUpdateRoute(function ($handle, $path) {
+            return Route::post($path, $handle)
+                ->middleware([
+                    'web',
+                    'universal',
+                    InitializeTenancyByDomain::class,
+                ]);
+        });
+
         $this->mapRoutes();
         $this->makeTenancyMiddlewareHighestPriority();
     }

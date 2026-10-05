@@ -103,10 +103,10 @@ return [
     */
 
     'middleware' => [
-    'web',
-    'universal',
-    InitializeTenancyByDomain::class,
-],
+        'web',
+        'universal',
+        InitializeTenancyByDomain::class,
+    ],
 
     /*
     |--------------------------------------------------------------------------
