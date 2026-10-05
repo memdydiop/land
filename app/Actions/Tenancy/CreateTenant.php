@@ -32,7 +32,7 @@ final class CreateTenant
             'name' => $validated['name'],
             'slug' => $slug,
             'status' => TenantStatus::Provisioning->value,
-            'schema_name' => 'tenant_'.$slug,
+            'schema_name' => 'tenant_'.Str::slug($slug, '_'),
             'database_identifier' => null,
             'timezone' => $validated['timezone'] ?? 'UTC',
             'locale' => $validated['locale'] ?? 'en',
