@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Models\Tenant;
+use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Stancl\JobPipeline\JobPipeline;
 use Stancl\Tenancy\Contracts\TenantWithDatabase;
@@ -14,6 +16,12 @@ use Stancl\Tenancy\Events;
 use Stancl\Tenancy\Jobs\CreateDatabase;
 use Stancl\Tenancy\Jobs\MigrateDatabase;
 use Stancl\Tenancy\Listeners;
+use Stancl\Tenancy\Middleware\InitializeTenancyByDomain;
+use Stancl\Tenancy\Middleware\InitializeTenancyByDomainOrSubdomain;
+use Stancl\Tenancy\Middleware\InitializeTenancyByPath;
+use Stancl\Tenancy\Middleware\InitializeTenancyByRequestData;
+use Stancl\Tenancy\Middleware\InitializeTenancyBySubdomain;
+use Stancl\Tenancy\Middleware\PreventAccessFromCentralDomains;
 
 class TenancyServiceProvider extends ServiceProvider
 {
@@ -21,6 +29,8 @@ class TenancyServiceProvider extends ServiceProvider
     {
         //
     }
+
+    public static string $controllerNamespace = '';
 
     public function boot(): void
     {
@@ -37,6 +47,8 @@ class TenancyServiceProvider extends ServiceProvider
         );
 
         $this->bootEvents();
+        $this->mapRoutes();
+        $this->makeTenancyMiddlewareHighestPriority();
     }
 
     protected function bootEvents(): void
@@ -63,5 +75,32 @@ class TenancyServiceProvider extends ServiceProvider
             Events\TenancyEnded::class,
             Listeners\RevertToCentralContext::class,
         );
+    }
+
+    protected function mapRoutes(): void
+    {
+        $this->app->booted(function (): void {
+            if (file_exists(base_path('routes/tenant.php'))) {
+                Route::namespace(static::$controllerNamespace)
+                    ->group(base_path('routes/tenant.php'));
+            }
+        });
+    }
+
+    protected function makeTenancyMiddlewareHighestPriority(): void
+    {
+        $tenancyMiddleware = [
+            PreventAccessFromCentralDomains::class,
+            InitializeTenancyByDomain::class,
+            InitializeTenancyBySubdomain::class,
+            InitializeTenancyByDomainOrSubdomain::class,
+            InitializeTenancyByPath::class,
+            InitializeTenancyByRequestData::class,
+        ];
+
+        foreach (array_reverse($tenancyMiddleware) as $middleware) {
+            $this->app[Kernel::class]
+                ->prependToMiddlewarePriority($middleware);
+        }
     }
 }
