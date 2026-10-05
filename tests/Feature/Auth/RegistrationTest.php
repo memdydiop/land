@@ -1,27 +1,26 @@
 <?php
 
-use Laravel\Fortify\Features;
+declare(strict_types=1);
 
-beforeEach(function () {
-    $this->skipUnlessFortifyHas(Features::registration());
-});
+namespace Tests\Feature\Auth;
 
-test('registration screen can be rendered', function () {
-    $response = $this->get(route('register'));
+use Livewire\Livewire;
+use Tests\TestCase;
 
-    $response->assertOk();
-});
+class RegistrationTest extends TestCase
+{
+    public function test_registration_page_is_the_organization_onboarding_page(): void
+    {
+        $response = $this->get(route('register'));
 
-test('new users can register', function () {
-    $response = $this->post(route('register.store'), [
-        'name' => 'John Doe',
-        'email' => 'test@example.com',
-        'password' => 'password',
-        'password_confirmation' => 'password',
-    ]);
+        $response->assertOk()
+            ->assertSeeLivewire('pages::auth.register');
+    }
 
-    $response->assertSessionHasNoErrors()
-        ->assertRedirect(route('dashboard', absolute: false));
-
-    $this->assertAuthenticated();
-});
+    public function test_registration_component_renders(): void
+    {
+        Livewire::test('pages::auth.register')
+            ->assertStatus(200)
+            ->assertSee('Créer mon organisation');
+    }
+}
