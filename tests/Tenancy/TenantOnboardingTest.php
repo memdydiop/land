@@ -32,7 +32,7 @@ class TenantOnboardingTest extends TenancyTestCase
         ]);
 
         $this->assertSame('active', $result->tenant->status);
-        $this->assertSame('tenant_'.$slug, $result->tenant->schema_name);
+        $this->assertSame('tenant_'.Str::slug($slug, '_'), $result->tenant->schema_name);
         $this->assertSame($email, $result->owner->email);
         $this->assertTrue($result->owner->hasRole('owner'));
         $this->assertSame($slug.'.land.ci', $result->domain->domain);
