@@ -17,11 +17,8 @@ class Invoice extends Model
     use HasFactory, HasUlids;
 
     protected $table = 'invoices';
-
     protected $keyType = 'string';
-
     public $incrementing = false;
-
     protected $guarded = [];
 
     protected function casts(): array
@@ -40,6 +37,16 @@ class Invoice extends Model
             'total' => 'decimal:4',
             'numbering_year' => 'integer',
         ];
+    }
+
+    public function operation(): BelongsTo
+    {
+        return $this->belongsTo(Operation::class);
+    }
+
+    public function sale(): BelongsTo
+    {
+        return $this->belongsTo(Sale::class);
     }
 
     public function client(): BelongsTo

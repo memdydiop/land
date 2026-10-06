@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Models;
 
-use App\Enums\ContractStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -12,11 +11,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
-class Contract extends Model
+class Sale extends Model
 {
     use HasFactory, HasUlids;
 
-    protected $table = 'contracts';
+    protected $table = 'sales';
     protected $keyType = 'string';
     public $incrementing = false;
     protected $guarded = [];
@@ -24,10 +23,14 @@ class Contract extends Model
     protected function casts(): array
     {
         return [
-            'status' => ContractStatus::class,
-            'start_date' => 'date',
-            'end_date' => 'date',
-            'amount' => 'decimal:4',
+            'sale_date' => 'date',
+            'base_amount' => 'decimal:4',
+            'discount_amount' => 'decimal:4',
+            'net_amount' => 'decimal:4',
+            'confirmed_at' => 'datetime',
+            'completed_at' => 'datetime',
+            'cancelled_at' => 'datetime',
+            'metadata' => 'array',
         ];
     }
 
@@ -36,38 +39,28 @@ class Contract extends Model
         return $this->belongsTo(Operation::class);
     }
 
-    public function party(): BelongsTo
+    public function lot(): BelongsTo
     {
-        return $this->belongsTo(Party::class);
+        return $this->belongsTo(Lot::class);
     }
 
-    public function project(): BelongsTo
+    public function reservation(): BelongsTo
     {
-        return $this->belongsTo(Project::class);
+        return $this->belongsTo(Reservation::class);
     }
 
-    public function sale(): BelongsTo
+    public function buyer(): BelongsTo
     {
-        return $this->belongsTo(Sale::class);
+        return $this->belongsTo(Party::class, 'buyer_party_id');
     }
 
-    public function items(): HasMany
+    public function contract(): HasOne
     {
-        return $this->hasMany(ContractItem::class);
+        return $this->hasOne(Contract::class);
     }
 
     public function invoices(): HasMany
     {
         return $this->hasMany(Invoice::class);
-    }
-
-    public function amendments(): HasMany
-    {
-        return $this->hasMany(ContractAmendment::class);
-    }
-
-    public function workSituations(): HasMany
-    {
-        return $this->hasMany(WorkSituation::class);
     }
 }

@@ -19,11 +19,8 @@ class Project extends Model
     use HasFactory, HasUlids, SoftDeletes;
 
     protected $table = 'projects';
-
     protected $keyType = 'string';
-
     public $incrementing = false;
-
     protected $guarded = [];
 
     protected function casts(): array
@@ -33,9 +30,14 @@ class Project extends Model
             'status' => ProjectStatus::class,
             'start_date' => 'date',
             'end_date' => 'date',
-            'budget_amount' => 'decimal:2',
+            'budget_amount' => 'decimal:4',
             'metadata' => 'array',
         ];
+    }
+
+    public function operation(): BelongsTo
+    {
+        return $this->belongsTo(Operation::class);
     }
 
     public function client(): BelongsTo
@@ -67,8 +69,7 @@ class Project extends Model
 
     public function phases(): HasMany
     {
-        return $this->hasMany(ProjectPhase::class)
-            ->orderBy('position');
+        return $this->hasMany(ProjectPhase::class)->orderBy('position');
     }
 
     public function tasks(): HasMany

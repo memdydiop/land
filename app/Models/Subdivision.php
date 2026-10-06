@@ -28,9 +28,15 @@ class Subdivision extends Model
         ];
     }
 
+    public function operation(): BelongsTo
+    {
+        return $this->belongsTo(Operation::class);
+    }
+
+    /** @deprecated Use operation(). */
     public function landOperation(): BelongsTo
     {
-        return $this->belongsTo(LandOperation::class);
+        return $this->belongsTo(Operation::class, 'operation_id');
     }
 
     public function blocks(): HasMany

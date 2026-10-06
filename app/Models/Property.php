@@ -18,9 +18,7 @@ class Property extends Model
     use HasFactory, SoftDeletes;
 
     protected $table = 'properties';
-
     protected $keyType = 'string';
-
     public $incrementing = false;
 
     protected static function booted(): void
@@ -38,6 +36,11 @@ class Property extends Model
             'type' => PropertyType::class,
             'status' => PropertyStatus::class,
         ];
+    }
+
+    public function operation(): BelongsTo
+    {
+        return $this->belongsTo(Operation::class);
     }
 
     public function parcel(): BelongsTo
