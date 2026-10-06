@@ -8,10 +8,10 @@ use App\Enums\LandStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Land extends Model
 {
@@ -37,18 +37,18 @@ class Land extends Model
         return $this->belongsTo(Party::class, 'owner_party_id');
     }
 
-    public function landOperations(): BelongsToMany
+    public function operations(): BelongsToMany
     {
         return $this->belongsToMany(
-            LandOperation::class,
-            'land_operation_lands',
+            Operation::class,
+            'operation_lands',
             'land_id',
-            'land_operation_id',
+            'operation_id',
         );
     }
 
-    public function landOperationLinks(): HasMany
+    public function operationLinks(): HasMany
     {
-        return $this->hasMany(LandOperationLand::class);
+        return $this->hasMany(OperationLand::class);
     }
 }

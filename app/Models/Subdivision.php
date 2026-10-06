@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Subdivision extends Model
 {
@@ -28,14 +29,24 @@ class Subdivision extends Model
         ];
     }
 
-    public function landOperation(): BelongsTo
+    public function operation(): BelongsTo
     {
-        return $this->belongsTo(LandOperation::class);
+        return $this->belongsTo(Operation::class);
     }
 
-    public function blocks(): HasMany
+    public function lands(): BelongsToMany
     {
-        return $this->hasMany(Block::class);
+        return $this->belongsToMany(
+            Land::class,
+            'subdivision_lands',
+            'subdivision_id',
+            'land_id',
+        );
+    }
+
+    public function ilots(): HasMany
+    {
+        return $this->hasMany(Ilot::class);
     }
 
     public function roads(): HasMany

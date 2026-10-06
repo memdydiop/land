@@ -7,15 +7,12 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        Schema::create('parcels', function (Blueprint $table) {
+        Schema::create('parcels', function (Blueprint $table): void {
             $table->ulid('id')->primary();
 
-            $table->ulid('block_id');
+            $table->ulid('ilot_id');
 
             $table->string('reference');
             $table->string('parcel_number');
@@ -34,26 +31,20 @@ return new class extends Migration
             $table->timestampsTz();
             $table->softDeletesTz();
 
-            // Business reference: unique within the tenant schema.
             $table->unique('reference');
+            $table->unique(['ilot_id', 'parcel_number']);
 
-            // Parcel number is unique within its block.
-            $table->unique(['block_id', 'parcel_number']);
-
-            // A parcel belongs strictly to one block.
-            $table->foreign('block_id')
+            $table->foreign('ilot_id')
                 ->references('id')
-                ->on('blocks')
+                ->on('ilots')
                 ->cascadeOnDelete();
 
-            // Query indexes.
-            $table->index('block_id');
+            $table->index('ilot_id');
             $table->index('status');
             $table->index('land_use');
         });
 
-        // Domain integrity: parcel status.
-        DB::statement("
+        DB::statement(<<<'SQL'
             ALTER TABLE parcels
             ADD CONSTRAINT parcels_status_check
             CHECK (
@@ -67,52 +58,45 @@ return new class extends Migration
                     'archived'
                 )
             )
-        ");
+            SQL);
 
-        // Area cannot be negative.
-        DB::statement("
+        DB::statement(<<<'SQL'
             ALTER TABLE parcels
             ADD CONSTRAINT parcels_area_check
             CHECK (
                 area IS NULL
                 OR area >= 0
             )
-        ");
+            SQL);
 
-        // Frontage cannot be negative.
-        DB::statement("
+        DB::statement(<<<'SQL'
             ALTER TABLE parcels
             ADD CONSTRAINT parcels_frontage_check
             CHECK (
                 frontage IS NULL
                 OR frontage >= 0
             )
-        ");
+            SQL);
 
-        // Depth cannot be negative.
-        DB::statement("
+        DB::statement(<<<'SQL'
             ALTER TABLE parcels
             ADD CONSTRAINT parcels_depth_check
             CHECK (
                 depth IS NULL
                 OR depth >= 0
             )
-        ");
+            SQL);
 
-        // PostGIS geometry integrity.
-        DB::statement("
+        DB::statement(<<<'SQL'
             ALTER TABLE parcels
             ADD CONSTRAINT parcels_boundary_srid_check
             CHECK (
                 boundary IS NULL
                 OR ST_SRID(boundary) = 4326
             )
-        ");
+            SQL);
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('parcels');

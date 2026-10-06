@@ -8,9 +8,9 @@ use App\Enums\ParcelStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Parcel extends Model
 {
@@ -31,13 +31,18 @@ class Parcel extends Model
         ];
     }
 
-    public function block(): BelongsTo
+    public function ilot(): BelongsTo
     {
-        return $this->belongsTo(Block::class);
+        return $this->belongsTo(Ilot::class);
     }
 
-    public function property(): HasOne
+    public function properties(): BelongsToMany
     {
-        return $this->hasOne(Property::class);
+        return $this->belongsToMany(
+            Property::class,
+            'property_parcels',
+            'parcel_id',
+            'property_id',
+        );
     }
 }

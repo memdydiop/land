@@ -7,12 +7,9 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        Schema::create('blocks', function (Blueprint $table) {
+        Schema::create('ilots', function (Blueprint $table): void {
             $table->ulid('id')->primary();
 
             $table->ulid('subdivision_id');
@@ -27,24 +24,20 @@ return new class extends Migration
 
             $table->timestampsTz();
 
-            // Business reference: unique within the tenant schema.
             $table->unique('reference');
 
-            // A block belongs strictly to one subdivision.
             $table->foreign('subdivision_id')
                 ->references('id')
                 ->on('subdivisions')
                 ->cascadeOnDelete();
 
-            // Query indexes.
             $table->index('subdivision_id');
             $table->index('status');
         });
 
-        // Domain integrity: block status.
-        DB::statement("
-            ALTER TABLE blocks
-            ADD CONSTRAINT blocks_status_check
+        DB::statement(<<<'SQL'
+            ALTER TABLE ilots
+            ADD CONSTRAINT ilots_status_check
             CHECK (
                 status IN (
                     'planned',
@@ -53,34 +46,29 @@ return new class extends Migration
                     'archived'
                 )
             )
-        ");
+            SQL);
 
-        // Area cannot be negative.
-        DB::statement("
-            ALTER TABLE blocks
-            ADD CONSTRAINT blocks_area_check
+        DB::statement(<<<'SQL'
+            ALTER TABLE ilots
+            ADD CONSTRAINT ilots_area_check
             CHECK (
                 area IS NULL
                 OR area >= 0
             )
-        ");
+            SQL);
 
-        // PostGIS geometry integrity.
-        DB::statement("
-            ALTER TABLE blocks
-            ADD CONSTRAINT blocks_boundary_srid_check
+        DB::statement(<<<'SQL'
+            ALTER TABLE ilots
+            ADD CONSTRAINT ilots_boundary_srid_check
             CHECK (
                 boundary IS NULL
                 OR ST_SRID(boundary) = 4326
             )
-        ");
+            SQL);
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::dropIfExists('blocks');
+        Schema::dropIfExists('ilots');
     }
 };
