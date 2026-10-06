@@ -15,7 +15,7 @@ return new class extends Migration
         Schema::create('subdivisions', function (Blueprint $table) {
             $table->ulid('id')->primary();
 
-            $table->ulid('land_operation_id');
+            $table->ulid('operation_id');
 
             $table->string('reference');
             $table->string('name');
@@ -30,14 +30,14 @@ return new class extends Migration
             // Business reference: unique within the tenant schema.
             $table->unique('reference');
 
-            // A subdivision belongs strictly to one land operation.
-            $table->foreign('land_operation_id')
+            // A subdivision belongs strictly to one operation.
+            $table->foreign('operation_id')
                 ->references('id')
-                ->on('land_operations')
+                ->on('operations')
                 ->cascadeOnDelete();
 
             // Query indexes.
-            $table->index('land_operation_id');
+            $table->index('operation_id');
             $table->index('status');
         });
 

@@ -15,6 +15,8 @@ return new class extends Migration
         Schema::create('projects', function (Blueprint $table) {
             $table->ulid('id')->primary();
 
+            $table->ulid('operation_id')->nullable();
+
             $table->string('reference');
             $table->string('name');
             $table->text('description')->nullable();
@@ -42,6 +44,11 @@ return new class extends Migration
             $table->unique('reference');
 
             // Foreign keys.
+            $table->foreign('operation_id')
+                ->references('id')
+                ->on('operations')
+                ->nullOnDelete();
+
             $table->foreign('client_party_id')
                 ->references('id')
                 ->on('parties')
@@ -53,6 +60,7 @@ return new class extends Migration
                 ->nullOnDelete();
 
             // Query indexes.
+            $table->index('operation_id');
             $table->index('type');
             $table->index('status');
             $table->index('client_party_id');

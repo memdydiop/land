@@ -6,47 +6,37 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        Schema::create('land_operation_lands', function (Blueprint $table) {
+        Schema::create('operation_lands', function (Blueprint $table): void {
             $table->ulid('id')->primary();
 
-            $table->ulid('land_operation_id');
+            $table->ulid('operation_id');
             $table->ulid('land_id');
 
             $table->timestampsTz();
 
-            // A land operation may reference the same land only once.
             $table->unique([
-                'land_operation_id',
+                'operation_id',
                 'land_id',
             ]);
 
-            // The association strictly depends on the operation.
-            $table->foreign('land_operation_id')
+            $table->foreign('operation_id')
                 ->references('id')
-                ->on('land_operations')
+                ->on('operations')
                 ->cascadeOnDelete();
 
-            // The association strictly depends on the land.
             $table->foreign('land_id')
                 ->references('id')
                 ->on('lands')
                 ->cascadeOnDelete();
 
-            // Useful for reverse lookups from a land.
             $table->index('land_id');
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::dropIfExists('land_operation_lands');
+        Schema::dropIfExists('operation_lands');
     }
 };
