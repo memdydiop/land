@@ -7,7 +7,7 @@ namespace App\Models;
 use App\Enums\PartyType;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -68,6 +68,24 @@ class Party extends Model
     public function reservations(): HasMany
     {
         return $this->hasMany(Reservation::class);
+    }
+
+    public function commercialOffers(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            CommercialOffer::class,
+            'offer_co_buyers',
+            'party_id',
+            'commercial_offer_id',
+        )->withPivot('share')->withTimestamps();
+    }
+
+    public function primaryCommercialOffers(): HasMany
+    {
+        return $this->hasMany(
+            CommercialOffer::class,
+            'buyer_party_id',
+        );
     }
 
     public function sales(): HasMany
