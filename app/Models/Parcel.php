@@ -10,8 +10,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Parcel extends Model
 {
@@ -50,8 +50,8 @@ class Parcel extends Model
         );
     }
 
-    public function commercialOffers(): HasMany
+    public function commercialOfferItems(): HasMany
     {
-        return $this->hasMany(CommercialOffer::class);
+        return $this->hasMany(CommercialOfferItem::class);
     }
 }

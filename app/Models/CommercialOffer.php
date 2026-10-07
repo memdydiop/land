@@ -8,7 +8,6 @@ use App\Enums\CommercialOfferStatus;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CommercialOffer extends Model
@@ -16,8 +15,11 @@ class CommercialOffer extends Model
     use HasFactory, HasUlids;
 
     protected $table = 'commercial_offers';
+
     protected $keyType = 'string';
+
     public $incrementing = false;
+
     protected $guarded = [];
 
     protected function casts(): array
@@ -30,14 +32,9 @@ class CommercialOffer extends Model
         ];
     }
 
-    public function parcel(): BelongsTo
+    public function items(): HasMany
     {
-        return $this->belongsTo(Parcel::class);
-    }
-
-    public function unit(): BelongsTo
-    {
-        return $this->belongsTo(Unit::class);
+        return $this->hasMany(CommercialOfferItem::class);
     }
 
     public function reservations(): HasMany
