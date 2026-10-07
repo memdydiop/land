@@ -11,14 +11,16 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-
 class Contract extends Model
 {
     use HasFactory, HasUlids;
 
     protected $table = 'contracts';
+
     protected $keyType = 'string';
+
     public $incrementing = false;
+
     protected $guarded = [];
 
     protected function casts(): array
@@ -36,6 +38,11 @@ class Contract extends Model
         return $this->belongsTo(Party::class);
     }
 
+    public function sale(): BelongsTo
+    {
+        return $this->belongsTo(Sale::class);
+    }
+
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class);
@@ -50,6 +57,7 @@ class Contract extends Model
     {
         return $this->hasMany(Invoice::class);
     }
+
     public function amendments(): HasMany
     {
         return $this->hasMany(ContractAmendment::class);

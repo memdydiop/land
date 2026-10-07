@@ -69,4 +69,9 @@ class Party extends Model
     {
         return $this->hasMany(Reservation::class);
     }
+
+    public function sales(): HasMany
+    {
+        return $this->hasMany(Sale::class, 'buyer_party_id');
+    }
 }
