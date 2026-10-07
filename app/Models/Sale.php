@@ -48,4 +48,9 @@ class Sale extends Model
     {
         return $this->hasMany(Contract::class);
     }
+
+    public function paymentScheduleItems(): HasMany
+    {
+        return $this->hasMany(PaymentScheduleItem::class);
+    }
 }

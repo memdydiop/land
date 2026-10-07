@@ -76,4 +76,9 @@ class Invoice extends Model
     {
         return $this->hasMany(CreditNote::class);
     }
+
+    public function paymentScheduleItem(): BelongsTo
+    {
+        return $this->belongsTo(PaymentScheduleItem::class, 'schedule_item_id');
+    }
 }
