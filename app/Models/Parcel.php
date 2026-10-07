@@ -11,14 +11,18 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Parcel extends Model
 {
     use HasFactory, HasUlids, SoftDeletes;
 
     protected $table = 'parcels';
+
     protected $keyType = 'string';
+
     public $incrementing = false;
+
     protected $guarded = [];
 
     protected function casts(): array
@@ -44,5 +48,10 @@ class Parcel extends Model
             'parcel_id',
             'property_id',
         );
+    }
+
+    public function commercialOffers(): HasMany
+    {
+        return $this->hasMany(CommercialOffer::class);
     }
 }
