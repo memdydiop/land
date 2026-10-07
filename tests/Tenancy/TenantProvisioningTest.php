@@ -8,7 +8,7 @@ use Tests\TenancyTestCase;
 uses(TenancyTestCase::class);
 
 test('tenant provisioning creates the schema and applies the complete migration set', function () {
-    $tenant = $this->testTenant('provisioning');
+    $tenant = $this->testTenant('provisioning_v2');
 
     expect($tenant->status)->toBe('active');
 
@@ -25,5 +25,5 @@ test('tenant provisioning creates the schema and applies the complete migration 
     );
 
     expect($tableCount)->toBe(71)
-        ->and($migrationCount)->toBe(79);
+        ->and($migrationCount)->toBe(80);
 });

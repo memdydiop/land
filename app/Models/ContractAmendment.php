@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\Finance\ContractAmendmentStatus;
+use App\Enums\Finance\ContractAmendmentType;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -32,6 +33,7 @@ class ContractAmendment extends Model
     protected function casts(): array
     {
         return [
+            'type' => ContractAmendmentType::class,
             'status' => ContractAmendmentStatus::class,
             'amount_delta' => 'decimal:4',
             'new_amount' => 'decimal:4',

@@ -29,7 +29,7 @@ class Contract extends Model
             'status' => ContractStatus::class,
             'start_date' => 'date',
             'end_date' => 'date',
-            'amount' => 'decimal:2',
+            'amount' => 'decimal:4',
         ];
     }
 
