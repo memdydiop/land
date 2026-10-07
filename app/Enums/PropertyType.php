@@ -11,6 +11,5 @@ enum PropertyType: string
     case Office = 'office';
     case Industrial = 'industrial';
     case Mixed = 'mixed';
-    case Land = 'land';
     case Other = 'other';
 }
