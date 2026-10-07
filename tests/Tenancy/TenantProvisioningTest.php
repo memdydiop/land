@@ -25,5 +25,5 @@ test('tenant provisioning creates the schema and applies the complete migration 
     );
 
     expect($tableCount)->toBe(70)
-        ->and($migrationCount)->toBe(77);
+        ->and($migrationCount)->toBe(78);
 });
