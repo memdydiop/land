@@ -15,8 +15,11 @@ class Reservation extends Model
     use HasFactory, HasUlids;
 
     protected $table = 'reservations';
+
     protected $keyType = 'string';
+
     public $incrementing = false;
+
     protected $guarded = [];
 
     protected function casts(): array
@@ -25,7 +28,9 @@ class Reservation extends Model
             'status' => ReservationStatus::class,
             'reserved_at' => 'datetime',
             'expires_at' => 'datetime',
-            'amount' => 'decimal:4',
+            'agreed_price' => 'decimal:4',
+            'deposit_amount' => 'decimal:4',
+            'deposit_due_date' => 'date',
         ];
     }
 
