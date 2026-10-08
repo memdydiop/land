@@ -54,8 +54,8 @@ class Unit extends Model
         return $this->hasMany(Occupancy::class);
     }
 
-    public function commercialOffers(): HasMany
+    public function commercialOfferItems(): HasMany
     {
-        return $this->hasMany(CommercialOffer::class);
+        return $this->hasMany(CommercialOfferItem::class);
     }
 }

@@ -58,4 +58,9 @@ class Property extends Model
     {
         return $this->hasMany(PropertyOwner::class);
     }
+
+    public function commercialOfferItems(): HasMany
+    {
+        return $this->hasMany(CommercialOfferItem::class);
+    }
 }

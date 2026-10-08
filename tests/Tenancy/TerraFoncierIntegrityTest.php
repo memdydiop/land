@@ -127,23 +127,30 @@ test('terra boundary tables enforce PostGIS geometry validity', function () {
     });
 });
 
-test('subdivision_lands enforces uniqueness and foreign keys', function () {
+test('subdivision_lands enforces uniqueness, foreign keys and operation coherence', function () {
     $tenant = $this->testTenant('terra_foncier_subdivision_lands');
 
     $tenant->run(function (): void {
         $operationId = (string) Str::ulid();
+        $otherOperationId = (string) Str::ulid();
         $subdivisionId = (string) Str::ulid();
         $landId = (string) Str::ulid();
+        $otherLandId = (string) Str::ulid();
 
-        DB::table('operations')->insert([
-            'id' => $operationId,
-            'reference' => 'OP-'.Str::upper(Str::random(10)),
-            'name' => 'Subdivision integrity test',
-            'type' => 'land_development',
-            'status' => 'active',
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        foreach ([
+            [$operationId, 'Subdivision integrity operation'],
+            [$otherOperationId, 'Other operation'],
+        ] as [$id, $name]) {
+            DB::table('operations')->insert([
+                'id' => $id,
+                'reference' => 'OP-'.Str::upper(Str::random(10)),
+                'name' => $name,
+                'type' => 'land_development',
+                'status' => 'active',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
 
         DB::table('subdivisions')->insert([
             'id' => $subdivisionId,
@@ -155,11 +162,24 @@ test('subdivision_lands enforces uniqueness and foreign keys', function () {
             'updated_at' => now(),
         ]);
 
-        DB::table('lands')->insert([
-            'id' => $landId,
-            'reference' => 'LAND-'.Str::upper(Str::random(10)),
-            'name' => 'Land integrity test',
-            'status' => 'acquired',
+        foreach ([
+            [$landId, 'Land integrity test'],
+            [$otherLandId, 'Other land'],
+        ] as [$id, $name]) {
+            DB::table('lands')->insert([
+                'id' => $id,
+                'reference' => 'LAND-'.Str::upper(Str::random(10)),
+                'name' => $name,
+                'status' => 'acquired',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        DB::table('operation_lands')->insert([
+            'id' => (string) Str::ulid(),
+            'operation_id' => $operationId,
+            'land_id' => $landId,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -167,6 +187,7 @@ test('subdivision_lands enforces uniqueness and foreign keys', function () {
         DB::table('subdivision_lands')->insert([
             'id' => (string) Str::ulid(),
             'subdivision_id' => $subdivisionId,
+            'operation_id' => $operationId,
             'land_id' => $landId,
             'created_at' => now(),
             'updated_at' => now(),
@@ -175,7 +196,8 @@ test('subdivision_lands enforces uniqueness and foreign keys', function () {
         expect(fn () => DB::table('subdivision_lands')->insert([
             'id' => (string) Str::ulid(),
             'subdivision_id' => $subdivisionId,
-            'land_id' => $landId,
+            'operation_id' => $operationId,
+            'land_id' => $otherLandId,
             'created_at' => now(),
             'updated_at' => now(),
         ]))->toThrow(QueryException::class);
@@ -183,7 +205,8 @@ test('subdivision_lands enforces uniqueness and foreign keys', function () {
         expect(fn () => DB::table('subdivision_lands')->insert([
             'id' => (string) Str::ulid(),
             'subdivision_id' => $subdivisionId,
-            'land_id' => (string) Str::ulid(),
+            'operation_id' => $operationId,
+            'land_id' => $landId,
             'created_at' => now(),
             'updated_at' => now(),
         ]))->toThrow(QueryException::class);

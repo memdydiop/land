@@ -51,4 +51,9 @@ class Land extends Model
     {
         return $this->hasMany(OperationLand::class);
     }
+
+    public function commercialOfferItems(): HasMany
+    {
+        return $this->hasMany(CommercialOfferItem::class);
+    }
 }
