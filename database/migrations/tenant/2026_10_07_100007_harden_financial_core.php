@@ -11,65 +11,14 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // La table reservations est créée après payments.
+        // Sa clé étrangère reste donc dans cette migration.
         Schema::table('payments', function (Blueprint $table): void {
-            $table->ulid('reservation_id')->nullable()->after('id');
-            $table->string('direction', 20)->default('incoming')->after('amount');
-            $table->string('type', 30)->default('invoice_payment')->after('direction');
-            $table->ulid('refund_of')->nullable()->after('reference');
-
             $table->foreign('reservation_id')
                 ->references('id')
                 ->on('reservations')
                 ->restrictOnDelete();
-
-            $table->foreign('refund_of')
-                ->references('id')
-                ->on('payments')
-                ->restrictOnDelete();
-
-            $table->index(['reservation_id', 'status']);
-            $table->index(['direction', 'type', 'status']);
-            $table->index('refund_of');
         });
-
-        /*
-         * Alignement avec le reste du Financial Core TERRA :
-         * Reservation / Sale / Invoice utilisent déjà numeric(20,4).
-         */
-        DB::statement(<<<'SQL'
-            ALTER TABLE payments
-            ALTER COLUMN amount TYPE NUMERIC(20,4)
-            USING amount::NUMERIC(20,4)
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE payments
-            ADD CONSTRAINT payments_direction_check
-            CHECK (direction IN ('incoming', 'outgoing'))
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE payments
-            ADD CONSTRAINT payments_type_check
-            CHECK (
-                type IN (
-                    'deposit',
-                    'invoice_payment',
-                    'installment',
-                    'refund',
-                    'other'
-                )
-            )
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE payments
-            ADD CONSTRAINT payments_refund_reference_check
-            CHECK (
-                refund_of IS NULL
-                OR (direction = 'outgoing' AND type = 'refund')
-            )
-            SQL);
 
         /*
          * Contract -> Sale
@@ -619,40 +568,8 @@ return new class extends Migration
         );
         DB::statement('DROP FUNCTION IF EXISTS terra_validate_contract_sale()');
 
-        DB::statement(
-            'ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_refund_reference_check'
-        );
-        DB::statement(
-            'ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_type_check'
-        );
-        DB::statement(
-            'ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_direction_check'
-        );
-
-        if (DB::table('payments')->whereRaw('amount <> ROUND(amount, 2)')->exists()) {
-            throw new RuntimeException(
-                'Rollback impossible: at least one payment amount uses more than 2 decimal places.'
-            );
-        }
-
         Schema::table('payments', function (Blueprint $table): void {
-            $table->dropForeign(['refund_of']);
             $table->dropForeign(['reservation_id']);
-            $table->dropIndex(['reservation_id', 'status']);
-            $table->dropIndex(['direction', 'type', 'status']);
-            $table->dropIndex(['refund_of']);
-            $table->dropColumn([
-                'reservation_id',
-                'direction',
-                'type',
-                'refund_of',
-            ]);
         });
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE payments
-            ALTER COLUMN amount TYPE NUMERIC(15,2)
-            USING amount::NUMERIC(15,2)
-            SQL);
     }
 };
