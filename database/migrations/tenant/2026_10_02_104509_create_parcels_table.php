@@ -14,6 +14,8 @@ return new class extends Migration
 
             $table->ulid('ilot_id');
 
+            $table->ulid('land_id')->nullable();
+
             $table->string('reference');
             $table->string('parcel_number');
 
@@ -39,7 +41,13 @@ return new class extends Migration
                 ->on('ilots')
                 ->cascadeOnDelete();
 
+            $table->foreign('land_id')
+                ->references('id')
+                ->on('lands')
+                ->restrictOnDelete();
+
             $table->index('ilot_id');
+            $table->index('land_id');
             $table->index('status');
             $table->index('land_use');
         });

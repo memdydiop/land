@@ -144,10 +144,122 @@ return new class extends Migration
 
     private function addCommercialExclusivityGuards(): void
     {
-        // Resolve a conservative, deterministic commercial conflict relation.
-        // Land-level ancestry is used only when a subdivision has exactly one
-        // underlying Land; the current schema cannot map a parcel to one Land
-        // unambiguously when a subdivision spans multiple Lands.
+        /*
+         * Backfill only when a subdivision resolves to exactly one Land.
+         * Ambiguous lineage remains NULL and is handled conservatively
+         * by the commercial conflict guards.
+         */
+        DB::statement(<<<'SQL'
+            UPDATE parcels AS p
+            SET land_id = resolved.land_id
+            FROM (
+                SELECT
+                    p2.id AS parcel_id,
+                    MIN(sl.land_id) AS land_id
+                FROM parcels p2
+                JOIN ilots i ON i.id = p2.ilot_id
+                JOIN subdivision_lands sl
+                    ON sl.subdivision_id = i.subdivision_id
+                GROUP BY p2.id
+                HAVING COUNT(DISTINCT sl.land_id) = 1
+            ) AS resolved
+            WHERE p.id = resolved.parcel_id
+              AND p.land_id IS NULL
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_validate_parcel_land_coherence()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+                IF NEW.land_id IS NULL OR NEW.ilot_id IS NULL THEN
+                    RETURN NEW;
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM ilots i
+                    JOIN subdivision_lands sl
+                        ON sl.subdivision_id = i.subdivision_id
+                    WHERE i.id = NEW.ilot_id
+                      AND sl.land_id = NEW.land_id
+                ) THEN
+                    RAISE EXCEPTION
+                        'Parcel % land does not belong to the subdivision of its ilot.',
+                        NEW.id
+                        USING ERRCODE = '23514';
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_validate_parcel_land_coherence_trigger
+            BEFORE INSERT OR UPDATE OF ilot_id, land_id
+            ON parcels
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_validate_parcel_land_coherence()
+            SQL);
+
+        // Resolve commercial conflicts conservatively.
+        // Explicit parcel.land_id is authoritative; inferred lineage must resolve
+        // to exactly one Land, otherwise Land-descendant conflicts are conservative.
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_strict_land_parcel_conflict(
+                p_land_id TEXT,
+                p_parcel_id TEXT
+            )
+            RETURNS BOOLEAN
+            LANGUAGE plpgsql
+            STABLE
+            AS $function$
+            DECLARE
+                parcel_land_id TEXT;
+                parcel_ilot_id TEXT;
+                candidate_count BIGINT;
+                candidate_land_id TEXT;
+            BEGIN
+                SELECT p.land_id::text, p.ilot_id::text
+                INTO parcel_land_id, parcel_ilot_id
+                FROM parcels p
+                WHERE p.id = p_parcel_id;
+
+                IF NOT FOUND THEN
+                    RETURN TRUE;
+                END IF;
+
+                -- An explicit Parcel -> Land mapping is authoritative.
+                IF parcel_land_id IS NOT NULL THEN
+                    RETURN parcel_land_id = p_land_id;
+                END IF;
+
+                -- An autonomous parcel without a recoverable lineage is unknown.
+                IF parcel_ilot_id IS NULL THEN
+                    RETURN TRUE;
+                END IF;
+
+                SELECT
+                    COUNT(DISTINCT sl.land_id),
+                    MIN(sl.land_id::text)
+                INTO candidate_count, candidate_land_id
+                FROM ilots i
+                LEFT JOIN subdivision_lands sl
+                    ON sl.subdivision_id = i.subdivision_id
+                WHERE i.id = parcel_ilot_id;
+
+                -- Zero or several candidate Lands means ambiguous lineage.
+                IF candidate_count <> 1 THEN
+                    RETURN TRUE;
+                END IF;
+
+                RETURN candidate_land_id = p_land_id;
+            END;
+            $function$
+            SQL);
+
         DB::statement(<<<'SQL'
             CREATE OR REPLACE FUNCTION terra_commercial_targets_conflict(
                 kind_a TEXT,
@@ -226,22 +338,7 @@ return new class extends Migration
                 END IF;
 
                 IF kind_a = 'land' AND kind_b = 'parcel' THEN
-                    RETURN EXISTS (
-                        SELECT 1
-                        FROM parcels p
-                        JOIN ilots i
-                            ON i.id = p.ilot_id
-                        JOIN subdivision_lands sl
-                            ON sl.subdivision_id = i.subdivision_id
-                        WHERE p.id = id_b
-                          AND sl.land_id = id_a
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM subdivision_lands sl2
-                              WHERE sl2.subdivision_id = sl.subdivision_id
-                                AND sl2.land_id <> sl.land_id
-                          )
-                    );
+                    RETURN terra_strict_land_parcel_conflict(id_a, id_b);
                 END IF;
 
                 IF kind_a = 'parcel' AND kind_b = 'land' THEN
@@ -251,22 +348,21 @@ return new class extends Migration
                 END IF;
 
                 IF kind_a = 'land' AND kind_b = 'property' THEN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM property_parcels
+                        WHERE property_id = id_b
+                    ) THEN
+                        RETURN TRUE;
+                    END IF;
+
                     RETURN EXISTS (
                         SELECT 1
                         FROM property_parcels pp
-                        JOIN parcels p
-                            ON p.id = pp.parcel_id
-                        JOIN ilots i
-                            ON i.id = p.ilot_id
-                        JOIN subdivision_lands sl
-                            ON sl.subdivision_id = i.subdivision_id
                         WHERE pp.property_id = id_b
-                          AND sl.land_id = id_a
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM subdivision_lands sl2
-                              WHERE sl2.subdivision_id = sl.subdivision_id
-                                AND sl2.land_id <> sl.land_id
+                          AND terra_strict_land_parcel_conflict(
+                              id_a,
+                              pp.parcel_id::text
                           )
                     );
                 END IF;
@@ -278,26 +374,27 @@ return new class extends Migration
                 END IF;
 
                 IF kind_a = 'land' AND kind_b = 'unit' THEN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM units u
+                        JOIN buildings b ON b.id = u.building_id
+                        JOIN property_parcels pp
+                            ON pp.property_id = b.property_id
+                        WHERE u.id = id_b
+                    ) THEN
+                        RETURN TRUE;
+                    END IF;
+
                     RETURN EXISTS (
                         SELECT 1
                         FROM units u
-                        JOIN buildings b
-                            ON b.id = u.building_id
+                        JOIN buildings b ON b.id = u.building_id
                         JOIN property_parcels pp
                             ON pp.property_id = b.property_id
-                        JOIN parcels p
-                            ON p.id = pp.parcel_id
-                        JOIN ilots i
-                            ON i.id = p.ilot_id
-                        JOIN subdivision_lands sl
-                            ON sl.subdivision_id = i.subdivision_id
                         WHERE u.id = id_b
-                          AND sl.land_id = id_a
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM subdivision_lands sl2
-                              WHERE sl2.subdivision_id = sl.subdivision_id
-                                AND sl2.land_id <> sl.land_id
+                          AND terra_strict_land_parcel_conflict(
+                              id_a,
+                              pp.parcel_id::text
                           )
                     );
                 END IF;
@@ -363,38 +460,92 @@ return new class extends Migration
                 FROM direct
                 WHERE unit_id IS NOT NULL
             ),
-            offer_lands AS (
-                SELECT land_id
-                FROM direct
-                WHERE land_id IS NOT NULL
+            candidate_lands AS (
+                SELECT d.land_id::text AS land_id
+                FROM direct d
+                WHERE d.land_id IS NOT NULL
 
                 UNION
 
-                SELECT sl.land_id
+                SELECT p.land_id::text
+                FROM offer_parcels op
+                JOIN parcels p ON p.id = op.parcel_id
+                WHERE p.land_id IS NOT NULL
+
+                UNION
+
+                SELECT sl.land_id::text
                 FROM offer_parcels op
                 JOIN parcels p ON p.id = op.parcel_id
                 JOIN ilots i ON i.id = p.ilot_id
                 JOIN subdivision_lands sl
                     ON sl.subdivision_id = i.subdivision_id
+            ),
+            ambiguous_parcels AS (
+                SELECT op.parcel_id
+                FROM offer_parcels op
+                JOIN parcels p ON p.id = op.parcel_id
+                LEFT JOIN ilots i ON i.id = p.ilot_id
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(DISTINCT sl.land_id) AS candidate_count
+                    FROM subdivision_lands sl
+                    WHERE sl.subdivision_id = i.subdivision_id
+                ) lineage ON TRUE
+                WHERE p.land_id IS NULL
+                  AND (
+                      p.ilot_id IS NULL
+                      OR COALESCE(lineage.candidate_count, 0) <> 1
+                  )
+            ),
+            ambiguous_properties AS (
+                SELECT op.property_id
+                FROM offer_properties op
                 WHERE NOT EXISTS (
                     SELECT 1
-                    FROM subdivision_lands sl2
-                    WHERE sl2.subdivision_id = sl.subdivision_id
-                      AND sl2.land_id <> sl.land_id
+                    FROM property_parcels pp
+                    WHERE pp.property_id = op.property_id
                 )
+            ),
+            requires_ambiguity_lock AS (
+                SELECT
+                    EXISTS (
+                        SELECT 1
+                        FROM direct
+                        WHERE land_id IS NOT NULL
+                    )
+                    OR EXISTS (SELECT 1 FROM ambiguous_parcels)
+                    OR EXISTS (SELECT 1 FROM ambiguous_properties)
+                    AS required
             )
-            SELECT DISTINCT 'land:' || land_id::text FROM offer_lands
+            SELECT DISTINCT 'land:' || land_id
+            FROM candidate_lands
+            WHERE land_id IS NOT NULL
+
             UNION
-            SELECT DISTINCT 'parcel:' || parcel_id::text FROM offer_parcels
+
+            SELECT DISTINCT 'parcel:' || parcel_id::text
+            FROM offer_parcels
+
             UNION
-            SELECT DISTINCT 'property:' || property_id::text FROM offer_properties
+
+            SELECT DISTINCT 'property:' || property_id::text
+            FROM offer_properties
+
             UNION
-            SELECT DISTINCT 'unit:' || unit_id::text FROM offer_units
+
+            SELECT DISTINCT 'unit:' || unit_id::text
+            FROM offer_units
+
             UNION
-            SELECT DISTINCT 'property:' || property_id::text FROM offer_properties
+
+            SELECT 'terra:land-lineage-ambiguity'
+            FROM requires_ambiguity_lock
+            WHERE required
+
             ORDER BY 1
             $function$
             SQL);
+
 
         DB::statement(<<<'SQL'
             CREATE OR REPLACE FUNCTION terra_guard_hierarchical_reservation_conflicts()
@@ -406,7 +557,7 @@ return new class extends Migration
                 new_target RECORD;
                 existing_target RECORD;
             BEGIN
-                IF NEW.status <> 'confirmed' THEN
+                IF NEW.status NOT IN ('confirmed', 'converted') THEN
                     RETURN NEW;
                 END IF;
 
@@ -630,7 +781,8 @@ return new class extends Migration
                 SELECT status, direction
                 INTO payment_status, payment_direction
                 FROM payments
-                WHERE id = NEW.payment_id;
+                WHERE id = NEW.payment_id
+                FOR UPDATE;
 
                 IF payment_status IS NULL THEN
                     RAISE EXCEPTION
@@ -718,6 +870,13 @@ return new class extends Migration
     public function down(): void
     {
         DB::statement(
+            'DROP TRIGGER IF EXISTS terra_validate_parcel_land_coherence_trigger ON parcels'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_validate_parcel_land_coherence()'
+        );
+
+        DB::statement(
             'DROP TRIGGER IF EXISTS terra_000_protect_allocated_payment_status ON payments'
         );
         DB::statement('DROP FUNCTION IF EXISTS terra_protect_allocated_payment_status()');
@@ -738,6 +897,7 @@ return new class extends Migration
         DB::statement('DROP FUNCTION IF EXISTS terra_guard_hierarchical_reservation_conflicts()');
         DB::statement('DROP FUNCTION IF EXISTS terra_commercial_offer_scope_keys(TEXT)');
         DB::statement('DROP FUNCTION IF EXISTS terra_commercial_targets_conflict(TEXT, TEXT, TEXT, TEXT)');
+        DB::statement('DROP FUNCTION IF EXISTS terra_strict_land_parcel_conflict(TEXT, TEXT)');
 
         DB::statement(
             'DROP TRIGGER IF EXISTS terra_validate_reservation_offer_integrity_trigger ON reservations'

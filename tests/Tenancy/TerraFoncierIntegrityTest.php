@@ -212,3 +212,109 @@ test('subdivision_lands enforces uniqueness, foreign keys and operation coherenc
         ]))->toThrow(QueryException::class);
     });
 });
+
+test('parcel land must belong to the subdivision of its ilot', function () {
+    $tenant = $this->testTenant('terra_foncier_parcel_land');
+
+    $tenant->run(function (): void {
+        $operationId = (string) Str::ulid();
+        $otherOperationId = (string) Str::ulid();
+        $subdivisionId = (string) Str::ulid();
+        $ilotId = (string) Str::ulid();
+        $landId = (string) Str::ulid();
+        $otherLandId = (string) Str::ulid();
+
+        DB::table('operations')->insert([
+            'id' => $operationId,
+            'reference' => 'OP-'.Str::upper(Str::random(10)),
+            'name' => 'Parcel Land Operation',
+            'type' => 'land_development',
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('operations')->insert([
+            'id' => $otherOperationId,
+            'reference' => 'OP-'.Str::upper(Str::random(10)),
+            'name' => 'Other Operation',
+            'type' => 'land_development',
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('subdivisions')->insert([
+            'id' => $subdivisionId,
+            'operation_id' => $operationId,
+            'reference' => 'SUB-'.Str::upper(Str::random(10)),
+            'name' => 'Parcel Land Subdivision',
+            'status' => 'draft',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        foreach ([
+            [$landId, $operationId, 'Main Land'],
+            [$otherLandId, $otherOperationId, 'Other Land'],
+        ] as [$id, $opId, $name]) {
+            DB::table('lands')->insert([
+                'id' => $id,
+                'reference' => 'LAND-'.Str::upper(Str::random(10)),
+                'name' => $name,
+                'status' => 'acquired',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            DB::table('operation_lands')->insert([
+                'id' => (string) Str::ulid(),
+                'operation_id' => $opId,
+                'land_id' => $id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        DB::table('subdivision_lands')->insert([
+            'id' => (string) Str::ulid(),
+            'subdivision_id' => $subdivisionId,
+            'operation_id' => $operationId,
+            'land_id' => $landId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('ilots')->insert([
+            'id' => $ilotId,
+            'subdivision_id' => $subdivisionId,
+            'reference' => 'ILOT-'.Str::upper(Str::random(10)),
+            'name' => 'Parcel Land Ilot',
+            'status' => 'planned',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('parcels')->insert([
+            'id' => (string) Str::ulid(),
+            'ilot_id' => $ilotId,
+            'land_id' => $landId,
+            'reference' => 'PARCEL-'.Str::upper(Str::random(10)),
+            'parcel_number' => 'P-001',
+            'status' => 'provisional',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('parcels')->insert([
+            'id' => (string) Str::ulid(),
+            'ilot_id' => $ilotId,
+            'land_id' => $otherLandId,
+            'reference' => 'PARCEL-'.Str::upper(Str::random(10)),
+            'parcel_number' => 'P-002',
+            'status' => 'provisional',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]))->toThrow(QueryException::class);
+    });
+});

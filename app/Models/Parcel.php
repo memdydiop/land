@@ -40,6 +40,11 @@ class Parcel extends Model
         return $this->belongsTo(Ilot::class);
     }
 
+    public function land(): BelongsTo
+    {
+        return $this->belongsTo(Land::class);
+    }
+
     public function properties(): BelongsToMany
     {
         return $this->belongsToMany(

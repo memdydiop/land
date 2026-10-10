@@ -87,24 +87,109 @@ return new class extends Migration
             LANGUAGE plpgsql
             AS $func$
             DECLARE
-                total numeric;
+                overlapping_same_party boolean;
+                max_total numeric;
             BEGIN
                 PERFORM pg_advisory_xact_lock(
                     hashtextextended(NEW.property_id::text, 0)
                 );
 
-                SELECT COALESCE(SUM(ownership_percentage), 0)
-                INTO total
-                FROM property_owners
-                WHERE property_id = NEW.property_id
-                  AND (start_date IS NULL OR start_date <= CURRENT_DATE)
-                  AND (end_date IS NULL OR end_date >= CURRENT_DATE)
-                  AND id <> NEW.id;
+                /*
+                 * Same party / same property:
+                 * periods must not overlap.
+                 */
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM property_owners po
+                    WHERE po.property_id = NEW.property_id
+                      AND po.party_id = NEW.party_id
+                      AND po.id <> NEW.id
+                      AND COALESCE(po.start_date, '-infinity'::date)
+                            <= COALESCE(NEW.end_date, 'infinity'::date)
+                      AND COALESCE(po.end_date, 'infinity'::date)
+                            >= COALESCE(NEW.start_date, '-infinity'::date)
+                )
+                INTO overlapping_same_party;
 
-                IF total + NEW.ownership_percentage > 100 THEN
+                IF overlapping_same_party THEN
                     RAISE EXCEPTION
-                        'Active ownership percentage for property % cannot exceed 100%%',
-                        NEW.property_id;
+                        'Party % already has an overlapping ownership period for property %.',
+                        NEW.party_id,
+                        NEW.property_id
+                        USING ERRCODE = '23514';
+                END IF;
+
+                /*
+                 * Build a temporal sweep:
+                 *
+                 * Every ownership interval generates:
+                 *   +percentage at start
+                 *   -percentage just after end
+                 *
+                 * Aggregating by date first is important so several
+                 * starts/ends on the same boundary are handled atomically.
+                 */
+                WITH relevant AS (
+                    SELECT
+                        COALESCE(NEW.start_date, '-infinity'::date) AS start_date,
+                        COALESCE(NEW.end_date, 'infinity'::date) AS end_date,
+                        NEW.ownership_percentage AS ownership_percentage
+
+                    UNION ALL
+
+                    SELECT
+                        COALESCE(po.start_date, '-infinity'::date),
+                        COALESCE(po.end_date, 'infinity'::date),
+                        po.ownership_percentage
+                    FROM property_owners po
+                    WHERE po.property_id = NEW.property_id
+                      AND po.id <> NEW.id
+                      AND COALESCE(po.start_date, '-infinity'::date)
+                            <= COALESCE(NEW.end_date, 'infinity'::date)
+                      AND COALESCE(po.end_date, 'infinity'::date)
+                            >= COALESCE(NEW.start_date, '-infinity'::date)
+                ),
+                events AS (
+                    SELECT
+                        start_date AS event_date,
+                        SUM(ownership_percentage) AS delta
+                    FROM relevant
+                    GROUP BY start_date
+
+                    UNION ALL
+
+                    SELECT
+                        end_date + 1 AS event_date,
+                        -SUM(ownership_percentage) AS delta
+                    FROM relevant
+                    GROUP BY end_date
+                ),
+                aggregated_events AS (
+                    SELECT
+                        event_date,
+                        SUM(delta) AS delta
+                    FROM events
+                    GROUP BY event_date
+                ),
+                sweep AS (
+                    SELECT
+                        event_date,
+                        SUM(delta) OVER (
+                            ORDER BY event_date
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        ) AS running_total
+                    FROM aggregated_events
+                )
+                SELECT COALESCE(MAX(running_total), 0)
+                INTO max_total
+                FROM sweep;
+
+                IF max_total > 100 THEN
+                    RAISE EXCEPTION
+                        'Ownership percentage for property % cannot exceed 100%% at any point in time. Maximum detected: %%%.',
+                        NEW.property_id,
+                        max_total
+                        USING ERRCODE = '23514';
                 END IF;
 
                 RETURN NEW;
@@ -117,6 +202,7 @@ return new class extends Migration
             CREATE TRIGGER property_owners_validate_total
             BEFORE INSERT OR UPDATE OF
                 property_id,
+                party_id,
                 ownership_percentage,
                 start_date,
                 end_date

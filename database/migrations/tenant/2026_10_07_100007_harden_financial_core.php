@@ -358,6 +358,8 @@ return new class extends Migration
                 invoice_sale_reservation_id TEXT;
                 allocated_payment_amount NUMERIC(20,4);
                 allocated_invoice_amount NUMERIC(20,4);
+                issued_credit_amount NUMERIC(20,4);
+                collectible_invoice_amount NUMERIC(20,4);
             BEGIN
                 SELECT id, amount, currency, direction, reservation_id
                 INTO payment_record
@@ -407,7 +409,8 @@ return new class extends Migration
                     WHERE c.id = invoice_record.contract_id;
 
                     IF invoice_sale_reservation_id IS NOT NULL
-                       AND invoice_sale_reservation_id <> payment_record.reservation_id::text
+                       AND invoice_sale_reservation_id
+                           <> payment_record.reservation_id::text
                     THEN
                         RAISE EXCEPTION
                             'Payment reservation must match the reservation behind the invoice contract.'
@@ -421,11 +424,22 @@ return new class extends Migration
                 WHERE payment_id = NEW.payment_id
                   AND id <> NEW.id;
 
-                IF allocated_payment_amount + NEW.amount > payment_record.amount THEN
+                IF allocated_payment_amount + NEW.amount
+                   > payment_record.amount
+                THEN
                     RAISE EXCEPTION
                         'Payment allocations exceed the payment amount.'
                         USING ERRCODE = '23514';
                 END IF;
+
+                SELECT COALESCE(SUM(total), 0)
+                INTO issued_credit_amount
+                FROM credit_notes
+                WHERE invoice_id = NEW.invoice_id
+                  AND status = 'issued';
+
+                collectible_invoice_amount :=
+                    invoice_record.total - issued_credit_amount;
 
                 SELECT COALESCE(SUM(amount), 0)
                 INTO allocated_invoice_amount
@@ -433,16 +447,20 @@ return new class extends Migration
                 WHERE invoice_id = NEW.invoice_id
                   AND id <> NEW.id;
 
-                IF allocated_invoice_amount + NEW.amount > invoice_record.total THEN
+                IF allocated_invoice_amount + NEW.amount
+                   > collectible_invoice_amount
+                THEN
                     RAISE EXCEPTION
-                        'Payment allocations exceed the invoice total.'
+                        'Payment allocations exceed the collectible balance of invoice % after issued credit notes.',
+                        NEW.invoice_id
                         USING ERRCODE = '23514';
                 END IF;
 
                 RETURN NEW;
             END;
             $function$
-            SQL);
+            SQL
+        );
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER terra_validate_payment_allocation_trigger
@@ -451,10 +469,136 @@ return new class extends Migration
             FOR EACH ROW
             EXECUTE FUNCTION terra_validate_payment_allocation()
             SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_allocated_payment_amount()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                allocated_amount NUMERIC(20,4);
+            BEGIN
+                IF TG_OP = 'UPDATE'
+                   AND NEW.amount IS DISTINCT FROM OLD.amount
+                   AND NEW.amount < OLD.amount
+                THEN
+                    SELECT COALESCE(SUM(amount), 0)
+                    INTO allocated_amount
+                    FROM payment_allocations
+                    WHERE payment_id = NEW.id;
+
+                    IF allocated_amount > NEW.amount THEN
+                        RAISE EXCEPTION
+                            'Payment % amount cannot be reduced below its allocated amount.',
+                            NEW.id
+                            USING ERRCODE = '23514';
+                    END IF;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL
+        );
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_protect_allocated_payment_amount
+            BEFORE UPDATE OF amount
+            ON payments
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_allocated_payment_amount()
+            SQL
+        );
+
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_validate_credit_note_financial()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                invoice_total NUMERIC(20,4);
+                invoice_currency CHAR(3);
+                issued_credit_amount NUMERIC(20,4);
+                allocated_payment_amount NUMERIC(20,4);
+            BEGIN
+                SELECT total, currency
+                INTO invoice_total, invoice_currency
+                FROM invoices
+                WHERE id = NEW.invoice_id
+                FOR UPDATE;
+
+                IF invoice_total IS NULL THEN
+                    RAISE EXCEPTION
+                        'Invoice % does not exist.',
+                        NEW.invoice_id
+                        USING ERRCODE = '23503';
+                END IF;
+
+                IF NEW.currency <> invoice_currency THEN
+                    RAISE EXCEPTION
+                        'Credit note currency must match invoice currency.'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                IF NEW.status <> 'issued' THEN
+                    RETURN NEW;
+                END IF;
+
+                SELECT COALESCE(SUM(total), 0)
+                INTO issued_credit_amount
+                FROM credit_notes
+                WHERE invoice_id = NEW.invoice_id
+                  AND status = 'issued'
+                  AND id <> NEW.id;
+
+                SELECT COALESCE(SUM(amount), 0)
+                INTO allocated_payment_amount
+                FROM payment_allocations
+                WHERE invoice_id = NEW.invoice_id;
+
+                IF issued_credit_amount
+                   + NEW.total
+                   + allocated_payment_amount
+                   > invoice_total
+                THEN
+                    RAISE EXCEPTION
+                        'Issued credit notes and payment allocations exceed invoice % total.',
+                        NEW.invoice_id
+                        USING ERRCODE = '23514';
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL
+        );
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_validate_credit_note_financial_trigger
+            BEFORE INSERT OR UPDATE OF invoice_id, currency, total, status
+            ON credit_notes
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_validate_credit_note_financial()
+            SQL
+        );
     }
 
     public function down(): void
     {
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_validate_credit_note_financial_trigger ON credit_notes'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_validate_credit_note_financial()'
+        );
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_protect_allocated_payment_amount ON payments'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_allocated_payment_amount()'
+        );
+
         DB::statement(
             'DROP TRIGGER IF EXISTS terra_validate_payment_allocation_trigger ON payment_allocations'
         );
