@@ -11,7 +11,6 @@ return new class extends Migration
     {
         Schema::create('payments', function (Blueprint $table) {
             $table->ulid('id')->primary();
-            $table->ulid('invoice_id');
             $table->decimal('amount', 20, 4);
             $table->char('currency', 3);
             $table->string('method');
@@ -20,9 +19,7 @@ return new class extends Migration
             $table->timestampTz('paid_at')->nullable();
             $table->timestampsTz();
 
-            $table->foreign('invoice_id')->references('id')->on('invoices')->restrictOnDelete();
 
-            $table->index('invoice_id');
             $table->index('status');
             $table->index('method');
             $table->index('paid_at');
