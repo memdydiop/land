@@ -17,9 +17,9 @@ return new class extends Migration
             $table->string('status');
             $table->date('quote_date');
             $table->date('valid_until')->nullable();
-            $table->decimal('subtotal', 15, 2);
-            $table->decimal('tax', 15, 2);
-            $table->decimal('total', 15, 2);
+            $table->decimal('subtotal', 20, 4);
+            $table->decimal('tax', 20, 4);
+            $table->decimal('total', 20, 4);
             $table->char('currency', 3);
             $table->timestampsTz();
 

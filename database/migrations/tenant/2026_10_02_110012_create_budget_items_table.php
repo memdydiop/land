@@ -14,7 +14,11 @@ return new class extends Migration
             $table->ulid('budget_id');
             $table->string('category');
             $table->text('description')->nullable();
-            $table->decimal('planned_amount', 15, 2);
+            $table->decimal('planned_amount', 20, 4);
+            $table->decimal('committed_amount', 20, 4)->default(0);
+            $table->decimal('actual_amount', 20, 4)->default(0);
+            $table->decimal('paid_amount', 20, 4)->default(0);
+            $table->decimal('forecast_amount', 20, 4)->default(0);
             $table->timestampsTz();
 
             $table->foreign('budget_id')->references('id')->on('budgets')->cascadeOnDelete();
@@ -23,6 +27,10 @@ return new class extends Migration
         });
 
         DB::statement("ALTER TABLE budget_items ADD CONSTRAINT budget_items_planned_amount_check CHECK (planned_amount >= 0)");
+        DB::statement("ALTER TABLE budget_items ADD CONSTRAINT budget_items_committed_amount_check CHECK (committed_amount >= 0)");
+        DB::statement("ALTER TABLE budget_items ADD CONSTRAINT budget_items_actual_amount_check CHECK (actual_amount >= 0)");
+        DB::statement("ALTER TABLE budget_items ADD CONSTRAINT budget_items_paid_amount_check CHECK (paid_amount >= 0)");
+        DB::statement("ALTER TABLE budget_items ADD CONSTRAINT budget_items_forecast_amount_check CHECK (forecast_amount >= 0)");
     }
 
     public function down(): void

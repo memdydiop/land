@@ -12,7 +12,7 @@ return new class extends Migration
         Schema::create('payments', function (Blueprint $table) {
             $table->ulid('id')->primary();
             $table->ulid('invoice_id');
-            $table->decimal('amount', 15, 2);
+            $table->decimal('amount', 20, 4);
             $table->char('currency', 3);
             $table->string('method');
             $table->string('reference')->nullable();
@@ -32,6 +32,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_amount_check CHECK (amount > 0)");
         DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_status_check CHECK (status IN ('pending','confirmed','failed','reversed','cancelled'))");
         DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_method_check CHECK (method IN ('cash','bank_transfer','mobile_money','card','cheque','other'))");
+        DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_currency_xof_check CHECK (currency = 'XOF')");
     }
 
     public function down(): void

@@ -15,7 +15,7 @@ return new class extends Migration
             $table->ulid('construction_site_id')->nullable();
             $table->string('name');
             $table->string('status');
-            $table->decimal('amount', 15, 2);
+            $table->decimal('amount', 20, 4);
             $table->char('currency', 3);
             $table->date('start_date')->nullable();
             $table->date('end_date')->nullable();
@@ -32,6 +32,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE budgets ADD CONSTRAINT budgets_status_check CHECK (status IN ('draft','active','closed','archived'))");
         DB::statement("ALTER TABLE budgets ADD CONSTRAINT budgets_amount_check CHECK (amount >= 0)");
         DB::statement("ALTER TABLE budgets ADD CONSTRAINT budgets_dates_check CHECK (start_date IS NULL OR end_date IS NULL OR end_date >= start_date)");
+        DB::statement("ALTER TABLE budgets ADD CONSTRAINT budgets_currency_xof_check CHECK (currency = 'XOF')");
     }
 
     public function down(): void

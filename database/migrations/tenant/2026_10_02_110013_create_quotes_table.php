@@ -17,9 +17,9 @@ return new class extends Migration
             $table->string('status');
             $table->date('quote_date');
             $table->date('valid_until')->nullable();
-            $table->decimal('subtotal', 15, 2);
-            $table->decimal('tax', 15, 2);
-            $table->decimal('total', 15, 2);
+            $table->decimal('subtotal', 20, 4);
+            $table->decimal('tax', 20, 4);
+            $table->decimal('total', 20, 4);
             $table->char('currency', 3);
             $table->timestampsTz();
 
@@ -37,6 +37,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE quotes ADD CONSTRAINT quotes_status_check CHECK (status IN ('draft','sent','viewed','accepted','rejected','expired','cancelled'))");
         DB::statement("ALTER TABLE quotes ADD CONSTRAINT quotes_amounts_check CHECK (subtotal >= 0 AND tax >= 0 AND total >= 0)");
         DB::statement("ALTER TABLE quotes ADD CONSTRAINT quotes_valid_until_check CHECK (valid_until IS NULL OR valid_until >= quote_date)");
+        DB::statement("ALTER TABLE quotes ADD CONSTRAINT quotes_currency_xof_check CHECK (currency = 'XOF')");
     }
 
     public function down(): void

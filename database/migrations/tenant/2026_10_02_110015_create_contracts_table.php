@@ -19,7 +19,7 @@ return new class extends Migration
             $table->string('status');
             $table->date('start_date')->nullable();
             $table->date('end_date')->nullable();
-            $table->decimal('amount', 15, 2);
+            $table->decimal('amount', 20, 4);
             $table->char('currency', 3);
             $table->timestampsTz();
 
@@ -28,8 +28,8 @@ return new class extends Migration
             $table->foreign('party_id')->references('id')->on('parties')->restrictOnDelete();
             $table->foreign('project_id')->references('id')->on('projects')->nullOnDelete();
 
-            $table->index('party_id');
-            $table->index('project_id');
+            $table->index(['party_id', 'status']);
+            $table->index(['project_id', 'status']);
             $table->index('status');
             $table->index('type');
         });
@@ -37,6 +37,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE contracts ADD CONSTRAINT contracts_status_check CHECK (status IN ('draft','pending_signature','active','suspended','completed','terminated','expired'))");
         DB::statement("ALTER TABLE contracts ADD CONSTRAINT contracts_amount_check CHECK (amount >= 0)");
         DB::statement("ALTER TABLE contracts ADD CONSTRAINT contracts_dates_check CHECK (start_date IS NULL OR end_date IS NULL OR end_date >= start_date)");
+        DB::statement("ALTER TABLE contracts ADD CONSTRAINT contracts_currency_xof_check CHECK (currency = 'XOF')");
     }
 
     public function down(): void

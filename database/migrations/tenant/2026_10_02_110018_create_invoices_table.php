@@ -19,9 +19,9 @@ return new class extends Migration
             $table->string('status');
             $table->date('issue_date');
             $table->date('due_date')->nullable();
-            $table->decimal('subtotal', 15, 2);
-            $table->decimal('tax', 15, 2);
-            $table->decimal('total', 15, 2);
+            $table->decimal('subtotal', 20, 4);
+            $table->decimal('tax', 20, 4);
+            $table->decimal('total', 20, 4);
             $table->char('currency', 3);
             $table->timestampsTz();
 
@@ -43,6 +43,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE invoices ADD CONSTRAINT invoices_status_check CHECK (status IN ('draft','issued','partially_paid','paid','overdue','cancelled'))");
         DB::statement("ALTER TABLE invoices ADD CONSTRAINT invoices_amounts_check CHECK (subtotal >= 0 AND tax >= 0 AND total >= 0)");
         DB::statement("ALTER TABLE invoices ADD CONSTRAINT invoices_due_date_check CHECK (due_date IS NULL OR due_date >= issue_date)");
+        DB::statement("ALTER TABLE invoices ADD CONSTRAINT invoices_currency_xof_check CHECK (currency = 'XOF')");
     }
 
     public function down(): void

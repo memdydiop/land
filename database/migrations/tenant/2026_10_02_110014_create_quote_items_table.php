@@ -13,11 +13,11 @@ return new class extends Migration
             $table->ulid('id')->primary();
             $table->ulid('quote_id');
             $table->text('description');
-            $table->decimal('quantity', 15, 3);
+            $table->decimal('quantity', 20, 6);
             $table->string('unit');
-            $table->decimal('unit_price', 15, 2);
-            $table->decimal('tax_rate', 7, 4);
-            $table->decimal('total', 15, 2);
+            $table->decimal('unit_price', 20, 4);
+            $table->decimal('tax_rate', 12, 6);
+            $table->decimal('total', 20, 4);
             $table->timestampsTz();
 
             $table->foreign('quote_id')->references('id')->on('quotes')->cascadeOnDelete();

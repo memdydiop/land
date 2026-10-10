@@ -8,6 +8,11 @@ use Tests\TenancyTestCase;
 uses(TenancyTestCase::class);
 
 test('tenant provisioning creates the schema and applies the complete migration set', function () {
+    // Force a fresh tenant schema so this test validates the current migration set.
+    DB::connection('pgsql')->statement(
+        'DROP SCHEMA IF EXISTS "tenant_test_provisioning_20261009" CASCADE'
+    );
+
     $tenant = $this->testTenant('provisioning_20261009');
 
     expect($tenant->status)->toBe('active');
@@ -25,5 +30,5 @@ test('tenant provisioning creates the schema and applies the complete migration 
     );
 
     expect($tableCount)->toBe(71)
-        ->and($migrationCount)->toBe(81);
+        ->and($migrationCount)->toBe(77);
 });

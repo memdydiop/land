@@ -16,7 +16,7 @@ return new class extends Migration
             $table->ulid('budget_id')->nullable();
             $table->string('category');
             $table->text('description');
-            $table->decimal('amount', 15, 2);
+            $table->decimal('amount', 20, 4);
             $table->char('currency', 3);
             $table->date('expense_date');
             $table->ulid('paid_by')->nullable();
@@ -39,6 +39,7 @@ return new class extends Migration
 
         DB::statement("ALTER TABLE expenses ADD CONSTRAINT expenses_status_check CHECK (status IN ('draft','submitted','approved','rejected','paid','cancelled'))");
         DB::statement("ALTER TABLE expenses ADD CONSTRAINT expenses_amount_check CHECK (amount > 0)");
+        DB::statement("ALTER TABLE expenses ADD CONSTRAINT expenses_currency_xof_check CHECK (currency = 'XOF')");
     }
 
     public function down(): void
