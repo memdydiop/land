@@ -318,3 +318,57 @@ test('parcel land must belong to the subdivision of its ilot', function () {
         ]))->toThrow(QueryException::class);
     });
 });
+
+test('building footprint geometry must be valid', function () {
+    $tenant = $this->testTenant('terra_foncier_building_footprint_valid');
+
+    $tenant->run(function (): void {
+        $propertyId = (string) Str::ulid();
+
+        DB::table('properties')->insert([
+            'id' => $propertyId,
+            'operation_id' => null,
+            'reference' => 'PROPERTY-'.Str::upper(Str::random(10)),
+            'name' => 'Building footprint validity test',
+            'type' => 'residential',
+            'status' => 'planned',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::insert(
+            <<<'SQL'
+                INSERT INTO buildings (
+                    id,
+                    property_id,
+                    name,
+                    reference,
+                    status,
+                    footprint,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    ?,
+                    ?,
+                    'Invalid footprint',
+                    ?,
+                    'planned',
+                    ST_Multi(
+                        ST_GeomFromText(
+                            'POLYGON((0 0, 1 1, 0 1, 1 0, 0 0))',
+                            4326
+                        )
+                    ),
+                    NOW(),
+                    NOW()
+                )
+                SQL,
+            [
+                (string) Str::ulid(),
+                $propertyId,
+                'BUILDING-'.Str::upper(Str::random(10)),
+            ],
+        ))->toThrow(QueryException::class);
+    });
+});

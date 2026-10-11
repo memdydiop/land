@@ -33,6 +33,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE buildings ADD CONSTRAINT buildings_floors_check CHECK (floors IS NULL OR floors > 0)");
         DB::statement("ALTER TABLE buildings ADD CONSTRAINT buildings_construction_year_check CHECK (construction_year IS NULL OR construction_year BETWEEN 1800 AND 2200)");
         DB::statement("ALTER TABLE buildings ADD CONSTRAINT buildings_footprint_srid_check CHECK (footprint IS NULL OR ST_SRID(footprint) = 4326)");
+        DB::statement("ALTER TABLE buildings ADD CONSTRAINT buildings_footprint_valid_check CHECK (footprint IS NULL OR ST_IsValid(footprint))");
     }
 
     public function down(): void
