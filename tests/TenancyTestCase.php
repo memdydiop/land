@@ -40,33 +40,26 @@ class TenancyTestCase extends TestCase
             [$schema],
         )->exists;
 
-        if ($tenant !== null && ! $schemaExists) {
+        if ($schemaExists) {
+            DB::connection('pgsql')->statement(
+                'DROP SCHEMA IF EXISTS "'.$schema.'" CASCADE'
+            );
+        }
+
+        if ($tenant !== null) {
             $tenant->delete();
-            $tenant = null;
         }
 
-        if ($tenant === null) {
-            if ($schemaExists) {
-                DB::connection('pgsql')->statement(
-                    'DROP SCHEMA IF EXISTS "'.$schema.'" CASCADE'
-                );
-            }
-
-            $tenant = Tenant::create([
-                'name' => 'Test '.ucwords(str_replace('_', ' ', $suffix)),
-                'slug' => $slug,
-                'status' => TenantStatus::Active->value,
-                'schema_name' => $schema,
-                'database_identifier' => null,
-                'timezone' => 'Africa/Abidjan',
-                'locale' => 'fr',
-                'currency' => 'XOF',
-                'data' => [
-                    'purpose' => 'automated-tenancy-tests',
-                ],
-            ]);
-        }
-
-        return $tenant->fresh();
+        return Tenant::create([
+            'name' => 'Test '.ucwords(str_replace('_', ' ', $suffix)),
+            'slug' => $slug,
+            'status' => TenantStatus::Active->value,
+            'schema_name' => $schema,
+            'database_identifier' => null,
+            'timezone' => 'Africa/Abidjan',
+            'locale' => 'fr',
+            'currency' => 'XOF',
+            'data' => ['purpose' => 'automated-tenancy-tests'],
+        ])->fresh();
     }
 }
