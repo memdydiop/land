@@ -55,6 +55,12 @@ return new class extends Migration
         ");
 
         DB::statement("
+            CREATE UNIQUE INDEX reservations_committed_offer_unique
+            ON reservations (commercial_offer_id)
+            WHERE status IN ('confirmed', 'converted')
+        ");
+
+        DB::statement("
             ALTER TABLE reservations
             ADD CONSTRAINT reservations_amount_check
             CHECK (amount >= 0)

@@ -3,80 +3,21 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        // -----------------------------------------------------------------
-        // Parcel identity: keep the V1 addition deliberately minimal.
-        // -----------------------------------------------------------------
-        Schema::table('parcels', function (Blueprint $table): void {
-            $table->string('lot_number')->nullable()->after('parcel_number');
-            $table->string('cadastral_reference')->nullable()->after('lot_number');
-        });
-
-        $this->addSubdivisionOperationIntegrity();
         $this->addCommercialOfferIntegrity();
         $this->addCommercialExclusivityGuards();
         $this->addFinancialAllocationGuards();
-    }
-
-    private function addSubdivisionOperationIntegrity(): void
-    {
-        Schema::table('subdivision_lands', function (Blueprint $table): void {
-            $table->ulid('operation_id')->nullable()->after('subdivision_id');
-        });
-
-        DB::statement(<<<'SQL'
-            UPDATE subdivision_lands AS sl
-            SET operation_id = s.operation_id
-            FROM subdivisions AS s
-            WHERE s.id = sl.subdivision_id
-              AND sl.operation_id IS NULL
-            SQL);
-
-        DB::statement(
-            'ALTER TABLE subdivision_lands ALTER COLUMN operation_id SET NOT NULL'
-        );
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE subdivisions
-            ADD CONSTRAINT subdivisions_operation_id_id_unique
-            UNIQUE (operation_id, id)
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE subdivision_lands
-            ADD CONSTRAINT subdivision_lands_operation_subdivision_fk
-            FOREIGN KEY (operation_id, subdivision_id)
-            REFERENCES subdivisions (operation_id, id)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE subdivision_lands
-            ADD CONSTRAINT subdivision_lands_operation_land_fk
-            FOREIGN KEY (operation_id, land_id)
-            REFERENCES operation_lands (operation_id, land_id)
-            ON UPDATE CASCADE
-            ON DELETE RESTRICT
-            SQL);
     }
 
     private function addCommercialOfferIntegrity(): void
     {
         // A committed offer may have one Reservation only. Multiple pending
         // reservations remain allowed until one of them is confirmed.
-        DB::statement(<<<'SQL'
-            CREATE UNIQUE INDEX reservations_committed_offer_unique
-            ON reservations (commercial_offer_id)
-            WHERE status IN ('confirmed', 'converted')
-            SQL);
 
         // Reservation must stay on the offer's currency and cannot become
         // meaningful (confirmed/converted) without at least one item.
@@ -144,28 +85,6 @@ return new class extends Migration
 
     private function addCommercialExclusivityGuards(): void
     {
-        /*
-         * Backfill only when a subdivision resolves to exactly one Land.
-         * Ambiguous lineage remains NULL and is handled conservatively
-         * by the commercial conflict guards.
-         */
-        DB::statement(<<<'SQL'
-            UPDATE parcels AS p
-            SET land_id = resolved.land_id
-            FROM (
-                SELECT
-                    p2.id AS parcel_id,
-                    MIN(sl.land_id) AS land_id
-                FROM parcels p2
-                JOIN ilots i ON i.id = p2.ilot_id
-                JOIN subdivision_lands sl
-                    ON sl.subdivision_id = i.subdivision_id
-                GROUP BY p2.id
-                HAVING COUNT(DISTINCT sl.land_id) = 1
-            ) AS resolved
-            WHERE p.id = resolved.parcel_id
-              AND p.land_id IS NULL
-            SQL);
 
         DB::statement(<<<'SQL'
             CREATE OR REPLACE FUNCTION terra_validate_parcel_land_coherence()
@@ -904,27 +823,8 @@ return new class extends Migration
         );
         DB::statement('DROP FUNCTION IF EXISTS terra_validate_reservation_offer_integrity()');
 
-        DB::statement('DROP INDEX IF EXISTS reservations_committed_offer_unique');
 
-        DB::statement(
-            'ALTER TABLE subdivision_lands DROP CONSTRAINT IF EXISTS subdivision_lands_operation_land_fk'
-        );
-        DB::statement(
-            'ALTER TABLE subdivision_lands DROP CONSTRAINT IF EXISTS subdivision_lands_operation_subdivision_fk'
-        );
-        DB::statement(
-            'ALTER TABLE subdivisions DROP CONSTRAINT IF EXISTS subdivisions_operation_id_id_unique'
-        );
 
-        Schema::table('subdivision_lands', function (Blueprint $table): void {
-            $table->dropColumn('operation_id');
-        });
 
-        Schema::table('parcels', function (Blueprint $table): void {
-            $table->dropColumn([
-                'lot_number',
-                'cadastral_reference',
-            ]);
-        });
     }
 };

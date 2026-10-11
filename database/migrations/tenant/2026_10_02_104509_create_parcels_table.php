@@ -18,6 +18,8 @@ return new class extends Migration
 
             $table->string('reference');
             $table->string('parcel_number');
+            $table->string('lot_number')->nullable();
+            $table->string('cadastral_reference')->nullable();
 
             $table->string('status');
 

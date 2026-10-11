@@ -48,6 +48,7 @@ return new class extends Migration
         Schema::create('subdivision_lands', function (Blueprint $table): void {
             $table->ulid('id')->primary();
             $table->ulid('subdivision_id');
+            $table->ulid('operation_id');
             $table->ulid('land_id');
             $table->timestampsTz();
 
@@ -61,6 +62,24 @@ return new class extends Migration
             $table->foreign('land_id')
                 ->references('id')
                 ->on('lands')
+                ->restrictOnDelete();
+
+            $table->foreign(
+                ['operation_id', 'subdivision_id'],
+                'subdivision_lands_operation_subdivision_fk',
+            )
+                ->references(['operation_id', 'id'])
+                ->on('subdivisions')
+                ->cascadeOnUpdate()
+                ->cascadeOnDelete();
+
+            $table->foreign(
+                ['operation_id', 'land_id'],
+                'subdivision_lands_operation_land_fk',
+            )
+                ->references(['operation_id', 'land_id'])
+                ->on('operation_lands')
+                ->cascadeOnUpdate()
                 ->restrictOnDelete();
 
             $table->index('land_id');

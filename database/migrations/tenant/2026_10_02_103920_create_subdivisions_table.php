@@ -29,6 +29,10 @@ return new class extends Migration
 
             // Business reference: unique within the tenant schema.
             $table->unique('reference');
+            $table->unique(
+                ['operation_id', 'id'],
+                'subdivisions_operation_id_id_unique',
+            );
 
             // A subdivision belongs strictly to one operation.
             $table->foreign('operation_id')
