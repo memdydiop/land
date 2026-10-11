@@ -22,8 +22,10 @@ return new class extends Migration
 
             $table->timestampTz('reserved_at');
             $table->timestampTz('expires_at')->nullable();
+            $table->date('deposit_due_date')->nullable();
 
-            $table->decimal('amount', 20, 4);
+            $table->decimal('agreed_price', 20, 4);
+            $table->decimal('deposit_amount', 20, 4);
             $table->char('currency', 3);
 
             $table->timestampsTz();
@@ -46,13 +48,8 @@ return new class extends Migration
             $table->index(['party_id', 'status']);
             $table->index('reserved_at');
             $table->index('expires_at');
+            $table->index('deposit_due_date');
         });
-
-        DB::statement("
-            CREATE UNIQUE INDEX reservations_active_offer_unique
-            ON reservations (commercial_offer_id)
-            WHERE status IN ('pending', 'confirmed')
-        ");
 
         DB::statement("
             CREATE UNIQUE INDEX reservations_committed_offer_unique
@@ -62,8 +59,17 @@ return new class extends Migration
 
         DB::statement("
             ALTER TABLE reservations
-            ADD CONSTRAINT reservations_amount_check
-            CHECK (amount >= 0)
+            ADD CONSTRAINT reservations_agreed_price_check
+            CHECK (agreed_price >= 0)
+        ");
+
+        DB::statement("
+            ALTER TABLE reservations
+            ADD CONSTRAINT reservations_deposit_amount_check
+            CHECK (
+                deposit_amount >= 0
+                AND deposit_amount <= agreed_price
+            )
         ");
 
         DB::statement("

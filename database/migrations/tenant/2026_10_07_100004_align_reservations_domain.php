@@ -3,61 +3,12 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        DB::statement(
-            'DROP INDEX IF EXISTS reservations_active_offer_unique'
-        );
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE reservations
-            DROP CONSTRAINT IF EXISTS reservations_amount_check
-            SQL);
-
-        DB::statement(
-            'ALTER TABLE reservations RENAME COLUMN amount TO deposit_amount'
-        );
-
-        Schema::table('reservations', function (Blueprint $table): void {
-            $table->decimal('agreed_price', 20, 4)->nullable();
-            $table->date('deposit_due_date')->nullable();
-
-            $table->index('deposit_due_date');
-        });
-
-        DB::statement(<<<'SQL'
-            UPDATE reservations AS reservations
-            SET agreed_price = commercial_offers.price
-            FROM commercial_offers
-            WHERE commercial_offers.id = reservations.commercial_offer_id
-              AND reservations.agreed_price IS NULL
-            SQL);
-
-        DB::statement(
-            'ALTER TABLE reservations ALTER COLUMN agreed_price SET NOT NULL'
-        );
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE reservations
-            ADD CONSTRAINT reservations_agreed_price_check
-            CHECK (agreed_price >= 0)
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE reservations
-            ADD CONSTRAINT reservations_deposit_amount_check
-            CHECK (
-                deposit_amount >= 0
-                AND deposit_amount <= agreed_price
-            )
-            SQL);
-
         DB::statement(<<<'SQL'
             CREATE OR REPLACE FUNCTION terra_prevent_confirmed_reservation_conflicts()
             RETURNS trigger
@@ -252,36 +203,5 @@ return new class extends Migration
             'DROP FUNCTION IF EXISTS terra_prevent_confirmed_reservation_conflicts()'
         );
 
-        DB::statement(
-            'ALTER TABLE reservations DROP CONSTRAINT IF EXISTS reservations_deposit_amount_check'
-        );
-
-        DB::statement(
-            'ALTER TABLE reservations DROP CONSTRAINT IF EXISTS reservations_agreed_price_check'
-        );
-
-        Schema::table('reservations', function (Blueprint $table): void {
-            $table->dropIndex(['deposit_due_date']);
-            $table->dropColumn([
-                'agreed_price',
-                'deposit_due_date',
-            ]);
-        });
-
-        DB::statement(
-            'ALTER TABLE reservations RENAME COLUMN deposit_amount TO amount'
-        );
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE reservations
-            ADD CONSTRAINT reservations_amount_check
-            CHECK (amount >= 0)
-            SQL);
-
-        DB::statement(<<<'SQL'
-            CREATE UNIQUE INDEX reservations_active_offer_unique
-            ON reservations (commercial_offer_id)
-            WHERE status IN ('pending', 'confirmed')
-            SQL);
     }
 };
