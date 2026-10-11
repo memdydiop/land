@@ -11,17 +11,6 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('commercial_offers', function (Blueprint $table): void {
-            $table->ulid('buyer_party_id')->nullable()->after('description');
-
-            $table->foreign('buyer_party_id')
-                ->references('id')
-                ->on('parties')
-                ->restrictOnDelete();
-
-            $table->index('buyer_party_id');
-        });
-
         Schema::create('offer_co_buyers', function (Blueprint $table): void {
             $table->ulid('id')->primary();
             $table->ulid('commercial_offer_id');
@@ -245,10 +234,5 @@ return new class extends Migration
 
         Schema::dropIfExists('offer_co_buyers');
 
-        Schema::table('commercial_offers', function (Blueprint $table): void {
-            $table->dropForeign(['buyer_party_id']);
-            $table->dropIndex(['buyer_party_id']);
-            $table->dropColumn('buyer_party_id');
-        });
     }
 };

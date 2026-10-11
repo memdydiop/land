@@ -65,14 +65,10 @@ return new class extends Migration
             SQL);
 
         Schema::table('contracts', function (Blueprint $table): void {
-            $table->ulid('sale_id')->nullable()->after('party_id');
-
             $table->foreign('sale_id')
                 ->references('id')
                 ->on('sales')
                 ->restrictOnDelete();
-
-            $table->index(['sale_id', 'status']);
         });
 
         /*
@@ -433,8 +429,6 @@ return new class extends Migration
 
         Schema::table('contracts', function (Blueprint $table): void {
             $table->dropForeign(['sale_id']);
-            $table->dropIndex(['sale_id', 'status']);
-            $table->dropColumn('sale_id');
         });
 
         Schema::dropIfExists('sales');

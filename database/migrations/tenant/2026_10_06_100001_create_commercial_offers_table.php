@@ -17,6 +17,7 @@ return new class extends Migration
             $table->string('reference');
             $table->string('title');
             $table->text('description')->nullable();
+            $table->ulid('buyer_party_id')->nullable();
 
             $table->ulid('parcel_id')->nullable();
             $table->ulid('unit_id')->nullable();
@@ -42,6 +43,12 @@ return new class extends Migration
                 ->on('units')
                 ->restrictOnDelete();
 
+            $table->foreign('buyer_party_id')
+                ->references('id')
+                ->on('parties')
+                ->restrictOnDelete();
+
+            $table->index('buyer_party_id');
             $table->index('parcel_id');
             $table->index('unit_id');
             $table->index('status');

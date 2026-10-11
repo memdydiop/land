@@ -12,6 +12,7 @@ return new class extends Migration
         Schema::create('contracts', function (Blueprint $table) {
             $table->ulid('id')->primary();
             $table->ulid('party_id');
+            $table->ulid('sale_id')->nullable();
             $table->ulid('project_id')->nullable();
             $table->string('reference');
             $table->string('title');
@@ -29,6 +30,7 @@ return new class extends Migration
             $table->foreign('project_id')->references('id')->on('projects')->nullOnDelete();
 
             $table->index(['party_id', 'status']);
+            $table->index(['sale_id', 'status']);
             $table->index(['project_id', 'status']);
             $table->index('status');
             $table->index('type');

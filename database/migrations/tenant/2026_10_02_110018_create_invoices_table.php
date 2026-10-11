@@ -15,6 +15,7 @@ return new class extends Migration
             $table->ulid('project_id')->nullable();
             $table->ulid('contract_id')->nullable();
             $table->ulid('work_situation_id')->nullable();
+            $table->ulid('schedule_item_id')->nullable();
             $table->string('reference');
             $table->string('invoice_number');
             $table->string('invoice_type', 30)->default('sale');
@@ -47,6 +48,7 @@ return new class extends Migration
             $table->index('project_id');
             $table->index('contract_id');
             $table->index('work_situation_id');
+            $table->index('schedule_item_id');
             $table->index(['numbering_year', 'status']);
             $table->index('status');
             $table->index('issue_date');

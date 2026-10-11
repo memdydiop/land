@@ -311,16 +311,10 @@ return new class extends Migration
             SQL);
 
         Schema::table('invoices', function (Blueprint $table): void {
-            $table->ulid('schedule_item_id')
-                ->nullable()
-                ->after('work_situation_id');
-
             $table->foreign('schedule_item_id')
                 ->references('id')
                 ->on('payment_schedule_items')
                 ->restrictOnDelete();
-
-            $table->index('schedule_item_id');
         });
 
         DB::statement(<<<'SQL'
@@ -357,8 +351,6 @@ return new class extends Migration
 
         Schema::table('invoices', function (Blueprint $table): void {
             $table->dropForeign(['schedule_item_id']);
-            $table->dropIndex(['schedule_item_id']);
-            $table->dropColumn('schedule_item_id');
         });
 
         Schema::dropIfExists('payment_schedule_items');
