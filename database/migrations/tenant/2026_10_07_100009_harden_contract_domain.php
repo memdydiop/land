@@ -11,76 +11,8 @@ return new class extends Migration
 {
     public function up(): void
     {
-        /*
-         * Les invoices sont de l'historique financier.
-         * Un contrat référencé par une facture ne doit jamais être
-         * supprimé en laissant une facture orpheline.
-         */
-        Schema::table('invoices', function (Blueprint $table): void {
-            $table->dropForeign(['contract_id']);
 
-            $table->foreign('contract_id')
-                ->references('id')
-                ->on('contracts')
-                ->restrictOnDelete();
-        });
 
-        /*
-         * Les amendements constituent également un historique contractuel.
-         * Une suppression de contrat ne doit donc pas cascader cet historique.
-         */
-        Schema::table('contract_amendments', function (Blueprint $table): void {
-            $table->dropForeign(['contract_id']);
-
-            $table->foreign('contract_id')
-                ->references('id')
-                ->on('contracts')
-                ->restrictOnDelete();
-        });
-
-        /*
-         * Cohérence métier minimale des amendements.
-         */
-        DB::statement(<<<'SQL'
-            ALTER TABLE contract_amendments
-            ADD CONSTRAINT contract_amendments_amount_type_check
-            CHECK (
-                type <> 'amount'
-                OR new_amount IS NOT NULL
-            )
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE contract_amendments
-            ADD CONSTRAINT contract_amendments_duration_type_check
-            CHECK (
-                type <> 'duration'
-                OR new_end_date IS NOT NULL
-            )
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE contract_amendments
-            ADD CONSTRAINT contract_amendments_approved_metadata_check
-            CHECK (
-                status <> 'approved'
-                OR (
-                    approved_by IS NOT NULL
-                    AND approved_at IS NOT NULL
-                    AND effective_date IS NOT NULL
-                )
-            )
-            SQL);
-
-        DB::statement(<<<'SQL'
-            ALTER TABLE contract_amendments
-            ADD CONSTRAINT contract_amendments_effective_end_date_check
-            CHECK (
-                effective_date IS NULL
-                OR new_end_date IS NULL
-                OR new_end_date >= effective_date
-            )
-            SQL);
 
         /*
          * Amendments :
@@ -187,42 +119,5 @@ return new class extends Migration
             'DROP FUNCTION IF EXISTS terra_validate_contract_amendment()'
         );
 
-        DB::statement(
-            'ALTER TABLE contract_amendments
-             DROP CONSTRAINT IF EXISTS contract_amendments_effective_end_date_check'
-        );
-
-        DB::statement(
-            'ALTER TABLE contract_amendments
-             DROP CONSTRAINT IF EXISTS contract_amendments_approved_metadata_check'
-        );
-
-        DB::statement(
-            'ALTER TABLE contract_amendments
-             DROP CONSTRAINT IF EXISTS contract_amendments_duration_type_check'
-        );
-
-        DB::statement(
-            'ALTER TABLE contract_amendments
-             DROP CONSTRAINT IF EXISTS contract_amendments_amount_type_check'
-        );
-
-        Schema::table('contract_amendments', function (Blueprint $table): void {
-            $table->dropForeign(['contract_id']);
-
-            $table->foreign('contract_id')
-                ->references('id')
-                ->on('contracts')
-                ->cascadeOnDelete();
-        });
-
-        Schema::table('invoices', function (Blueprint $table): void {
-            $table->dropForeign(['contract_id']);
-
-            $table->foreign('contract_id')
-                ->references('id')
-                ->on('contracts')
-                ->nullOnDelete();
-        });
     }
 };

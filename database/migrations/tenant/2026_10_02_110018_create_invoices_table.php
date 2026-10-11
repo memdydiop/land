@@ -37,7 +37,7 @@ return new class extends Migration
 
             $table->foreign('client_party_id')->references('id')->on('parties')->restrictOnDelete();
             $table->foreign('project_id')->references('id')->on('projects')->nullOnDelete();
-            $table->foreign('contract_id')->references('id')->on('contracts')->nullOnDelete();
+            $table->foreign('contract_id')->references('id')->on('contracts')->restrictOnDelete();
             $table->foreign('work_situation_id')
                 ->references('id')
                 ->on('work_situations')

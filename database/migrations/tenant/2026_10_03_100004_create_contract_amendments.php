@@ -29,7 +29,7 @@ return new class extends Migration
             $table->foreign('contract_id')
                 ->references('id')
                 ->on('contracts')
-                ->cascadeOnDelete();
+                ->restrictOnDelete();
 
             $table->foreign('approved_by')
                 ->references('id')
@@ -67,6 +67,41 @@ return new class extends Migration
             ALTER TABLE contract_amendments
             ADD CONSTRAINT contract_amendments_new_amount_check
             CHECK (new_amount IS NULL OR new_amount >= 0)
+        ");
+
+        DB::statement("
+            ALTER TABLE contract_amendments
+            ADD CONSTRAINT contract_amendments_amount_type_check
+            CHECK (type <> 'amount' OR new_amount IS NOT NULL)
+        ");
+
+        DB::statement("
+            ALTER TABLE contract_amendments
+            ADD CONSTRAINT contract_amendments_duration_type_check
+            CHECK (type <> 'duration' OR new_end_date IS NOT NULL)
+        ");
+
+        DB::statement("
+            ALTER TABLE contract_amendments
+            ADD CONSTRAINT contract_amendments_approved_metadata_check
+            CHECK (
+                status <> 'approved'
+                OR (
+                    approved_by IS NOT NULL
+                    AND approved_at IS NOT NULL
+                    AND effective_date IS NOT NULL
+                )
+            )
+        ");
+
+        DB::statement("
+            ALTER TABLE contract_amendments
+            ADD CONSTRAINT contract_amendments_effective_end_date_check
+            CHECK (
+                effective_date IS NULL
+                OR new_end_date IS NULL
+                OR new_end_date >= effective_date
+            )
         ");
     }
 
