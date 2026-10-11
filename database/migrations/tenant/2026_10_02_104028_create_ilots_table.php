@@ -65,6 +65,14 @@ return new class extends Migration
                 OR ST_SRID(boundary) = 4326
             )
             SQL);
+        DB::statement("
+            ALTER TABLE ilots
+            ADD CONSTRAINT ilots_boundary_valid_check
+            CHECK (
+                boundary IS NULL
+                OR ST_IsValid(boundary)
+            )
+        ");
     }
 
     public function down(): void

@@ -12,7 +12,7 @@ return new class extends Migration
         Schema::create('parcels', function (Blueprint $table): void {
             $table->ulid('id')->primary();
 
-            $table->ulid('ilot_id');
+            $table->ulid('ilot_id')->nullable();
 
             $table->ulid('land_id')->nullable();
 
@@ -59,12 +59,11 @@ return new class extends Migration
             ADD CONSTRAINT parcels_status_check
             CHECK (
                 status IN (
-                    'available',
-                    'reserved',
-                    'under_contract',
-                    'sold',
-                    'transferred',
-                    'blocked',
+                    'provisional',
+                    'registered',
+                    'merged',
+                    'split',
+                    'cancelled',
                     'archived'
                 )
             )
@@ -103,6 +102,15 @@ return new class extends Migration
             CHECK (
                 boundary IS NULL
                 OR ST_SRID(boundary) = 4326
+            )
+            SQL);
+
+        DB::statement(<<<'SQL'
+            ALTER TABLE parcels
+            ADD CONSTRAINT parcels_boundary_valid_check
+            CHECK (
+                boundary IS NULL
+                OR ST_IsValid(boundary)
             )
             SQL);
     }

@@ -49,7 +49,6 @@ return new class extends Migration
                     'office',
                     'industrial',
                     'mixed',
-                    'land',
                     'other'
                 )
             )

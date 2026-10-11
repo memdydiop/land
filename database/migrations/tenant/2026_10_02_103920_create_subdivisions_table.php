@@ -45,6 +45,35 @@ return new class extends Migration
             $table->index('status');
         });
 
+        Schema::create('subdivision_lands', function (Blueprint $table): void {
+            $table->ulid('id')->primary();
+            $table->ulid('subdivision_id');
+            $table->ulid('operation_id');
+            $table->ulid('land_id');
+            $table->timestampsTz();
+
+            $table->unique(['subdivision_id', 'land_id']);
+
+            $table->foreign('subdivision_id')
+                ->references('id')->on('subdivisions')->cascadeOnDelete();
+            $table->foreign('land_id')
+                ->references('id')->on('lands')->restrictOnDelete();
+
+            $table->foreign(
+                ['operation_id', 'subdivision_id'],
+                'subdivision_lands_operation_subdivision_fk',
+            )->references(['operation_id', 'id'])
+                ->on('subdivisions')->cascadeOnUpdate()->cascadeOnDelete();
+
+            $table->foreign(
+                ['operation_id', 'land_id'],
+                'subdivision_lands_operation_land_fk',
+            )->references(['operation_id', 'land_id'])
+                ->on('operation_lands')->cascadeOnUpdate()->restrictOnDelete();
+
+            $table->index('land_id');
+        });
+
         // Domain integrity: subdivision status.
         DB::statement("
             ALTER TABLE subdivisions
@@ -79,6 +108,14 @@ return new class extends Migration
                 OR ST_SRID(boundary) = 4326
             )
         ");
+        DB::statement("
+            ALTER TABLE subdivisions
+            ADD CONSTRAINT subdivisions_boundary_valid_check
+            CHECK (
+                boundary IS NULL
+                OR ST_IsValid(boundary)
+            )
+        ");
     }
 
     /**
@@ -86,6 +123,7 @@ return new class extends Migration
      */
     public function down(): void
     {
+        Schema::dropIfExists('subdivision_lands');
         Schema::dropIfExists('subdivisions');
     }
 };
