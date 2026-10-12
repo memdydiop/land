@@ -69,6 +69,18 @@ return new class extends Migration
                     END IF;
                 END IF;
 
+                IF NEW.status = 'converted'
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM sales
+                       WHERE reservation_id = NEW.id
+                   )
+                THEN
+                    RAISE EXCEPTION
+                        'A converted reservation must have a linked sale.'
+                        USING ERRCODE = '23514';
+                END IF;
+
                 RETURN NEW;
             END;
             $function$
@@ -476,6 +488,15 @@ return new class extends Migration
                 new_target RECORD;
                 existing_target RECORD;
             BEGIN
+                IF TG_OP = 'UPDATE'
+                   AND OLD.status = 'converted'
+                   AND NEW.status <> 'converted'
+                THEN
+                    RAISE EXCEPTION
+                        'A converted reservation cannot leave the converted state.'
+                        USING ERRCODE = '55006';
+                END IF;
+
                 IF NEW.status NOT IN ('confirmed', 'converted') THEN
                     RETURN NEW;
                 END IF;

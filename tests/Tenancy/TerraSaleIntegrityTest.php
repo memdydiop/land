@@ -100,6 +100,15 @@ test('sale is created from a confirmed reservation and freezes converted offer i
                 'updated_at' => now(),
             ]);
 
+        // A converted reservation must remain the durable lock behind its sale.
+        expect(fn () => DB::table('reservations')
+            ->where('id', $reservationId)
+            ->update([
+                'status' => 'cancelled',
+                'updated_at' => now(),
+            ])
+        )->toThrow(QueryException::class);
+
         expect(fn () => DB::table('commercial_offer_items')
             ->where('id', $offerItemId)
             ->update([

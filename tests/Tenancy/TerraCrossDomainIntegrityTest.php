@@ -301,3 +301,34 @@ test('offer relation models expose commercial offer items consistently', functio
             ->toBeInstanceOf(\App\Models\CommercialOfferItem::class);
     });
 });
+
+test('converting a reservation requires a linked sale', function () use (
+    $party,
+    $offer,
+    $reservation,
+    $parcel,
+    $offerItem,
+) {
+    $tenant = $this->testTenant('terra_converted_reservation_requires_sale');
+
+    $tenant->run(function () use (
+        $party,
+        $offer,
+        $reservation,
+        $parcel,
+        $offerItem,
+    ): void {
+        $partyId = $party('Converted Reservation Buyer');
+        $offerId = $offer('TERRA-CONVERTED-WITHOUT-SALE');
+        $parcelId = $parcel('TERRA-CONVERTED-PARCEL');
+
+        $offerItem($offerId, ['parcel_id' => $parcelId]);
+
+        $reservationId = $reservation($offerId, $partyId, 'confirmed');
+
+        expect(fn () => DB::table('reservations')
+            ->where('id', $reservationId)
+            ->update(['status' => 'converted'])
+        )->toThrow(QueryException::class);
+    });
+});
