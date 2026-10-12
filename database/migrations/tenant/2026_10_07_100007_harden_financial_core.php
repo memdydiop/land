@@ -733,6 +733,149 @@ return new class extends Migration
             EXECUTE FUNCTION terra_validate_payment_allocation()
             SQL);
 
+        // Protect settled invoices against direct allocation changes.
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_paid_invoice_allocation()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                old_invoice_status TEXT;
+                new_invoice_status TEXT;
+            BEGIN
+                IF TG_OP = 'UPDATE' THEN
+                    IF ROW(
+                        NEW.payment_id,
+                        NEW.invoice_id,
+                        NEW.amount
+                    ) IS NOT DISTINCT FROM ROW(
+                        OLD.payment_id,
+                        OLD.invoice_id,
+                        OLD.amount
+                    ) THEN
+                        RETURN NEW;
+                    END IF;
+
+                    -- Use the same lock order as allocation validation:
+                    -- payments first, then invoices.
+                    IF NEW.payment_id IS DISTINCT FROM OLD.payment_id THEN
+                        PERFORM id
+                        FROM payments
+                        WHERE id IN (OLD.payment_id, NEW.payment_id)
+                        ORDER BY id
+                        FOR UPDATE;
+                    ELSE
+                        PERFORM id
+                        FROM payments
+                        WHERE id = OLD.payment_id
+                        FOR UPDATE;
+                    END IF;
+
+                    IF NEW.invoice_id IS DISTINCT FROM OLD.invoice_id THEN
+                        PERFORM id
+                        FROM invoices
+                        WHERE id IN (OLD.invoice_id, NEW.invoice_id)
+                        ORDER BY id
+                        FOR UPDATE;
+                    ELSE
+                        PERFORM id
+                        FROM invoices
+                        WHERE id = OLD.invoice_id
+                        FOR UPDATE;
+                    END IF;
+                ELSE
+                    PERFORM id
+                    FROM payments
+                    WHERE id = OLD.payment_id
+                    FOR UPDATE;
+
+                    PERFORM id
+                    FROM invoices
+                    WHERE id = OLD.invoice_id
+                    FOR UPDATE;
+                END IF;
+
+                SELECT status
+                INTO old_invoice_status
+                FROM invoices
+                WHERE id = OLD.invoice_id;
+
+                IF NOT FOUND THEN
+                    RAISE EXCEPTION
+                        'Invoice % does not exist for allocation %.',
+                        OLD.invoice_id,
+                        OLD.id
+                        USING ERRCODE = '23503';
+                END IF;
+
+                IF old_invoice_status = 'paid' THEN
+                    RAISE EXCEPTION
+                        'Financial allocation % for paid invoice % cannot be modified or deleted.',
+                        OLD.id,
+                        OLD.invoice_id
+                        USING ERRCODE = '55006';
+                END IF;
+
+                IF TG_OP = 'UPDATE'
+                   AND NEW.invoice_id IS DISTINCT FROM OLD.invoice_id
+                THEN
+                    SELECT status
+                    INTO new_invoice_status
+                    FROM invoices
+                    WHERE id = NEW.invoice_id;
+
+                    IF NOT FOUND THEN
+                        RAISE EXCEPTION
+                            'Destination invoice % does not exist.',
+                            NEW.invoice_id
+                            USING ERRCODE = '23503';
+                    END IF;
+
+                    IF new_invoice_status = 'paid' THEN
+                        RAISE EXCEPTION
+                            'Allocation % cannot be moved to paid invoice %.',
+                            OLD.id,
+                            NEW.invoice_id
+                            USING ERRCODE = '55006';
+                    END IF;
+                END IF;
+
+                IF old_invoice_status = 'partially_paid' THEN
+                    IF TG_OP = 'DELETE' THEN
+                        RAISE EXCEPTION
+                            'Allocation % cannot be deleted from partially paid invoice %.',
+                            OLD.id,
+                            OLD.invoice_id
+                            USING ERRCODE = '55006';
+                    END IF;
+
+                    IF NEW.invoice_id IS DISTINCT FROM OLD.invoice_id
+                       OR NEW.amount < OLD.amount
+                    THEN
+                        RAISE EXCEPTION
+                            'Allocation % cannot be reduced or moved from partially paid invoice %.',
+                            OLD.id,
+                            OLD.invoice_id
+                            USING ERRCODE = '55006';
+                    END IF;
+                END IF;
+
+                IF TG_OP = 'DELETE' THEN
+                    RETURN OLD;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_protect_paid_invoice_allocation_trigger
+            BEFORE UPDATE OR DELETE ON payment_allocations
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_paid_invoice_allocation()
+            SQL);
+
         DB::statement(<<<'SQL'
             CREATE OR REPLACE FUNCTION terra_protect_allocated_payment_amount()
             RETURNS trigger
@@ -1130,6 +1273,13 @@ return new class extends Migration
         );
         DB::statement(
             'DROP FUNCTION IF EXISTS terra_protect_allocated_payment_amount()'
+        );
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_protect_paid_invoice_allocation_trigger ON payment_allocations'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_paid_invoice_allocation()'
         );
 
         DB::statement(

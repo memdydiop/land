@@ -671,3 +671,105 @@ test('cancelled credit notes cannot be reopened', function () {
         )->toThrow(QueryException::class);
     });
 });
+
+
+test('payment allocation backing a paid invoice cannot be deleted', function () {
+    $tenant = $this->testTenant('terra_paid_invoice_allocation_delete_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        DB::table('payment_allocations')->insert([
+            'id' => (string) Str::ulid(),
+            'payment_id' => $fixture['paymentId'],
+            'invoice_id' => $fixture['invoiceId'],
+            'amount' => '1000000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['status' => 'paid']);
+
+        expect(fn () => DB::table('payment_allocations')
+            ->where('payment_id', $fixture['paymentId'])
+            ->where('invoice_id', $fixture['invoiceId'])
+            ->update(['amount' => '900000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('payment_allocations')
+            ->where('payment_id', $fixture['paymentId'])
+            ->where('invoice_id', $fixture['invoiceId'])
+            ->delete()
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('payment_allocations')
+                ->where('payment_id', $fixture['paymentId'])
+                ->where('invoice_id', $fixture['invoiceId'])
+                ->exists()
+        )->toBeTrue();
+
+        expect(
+            DB::table('invoices')
+                ->where('id', $fixture['invoiceId'])
+                ->value('status')
+        )->toBe('paid');
+    });
+});
+
+
+test('allocation backing a partially paid invoice cannot be reduced or deleted', function () {
+    $tenant = $this->testTenant('terra_partial_invoice_allocation_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        DB::table('payment_allocations')->insert([
+            'id' => (string) Str::ulid(),
+            'payment_id' => $fixture['paymentId'],
+            'invoice_id' => $fixture['invoiceId'],
+            'amount' => '500000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['status' => 'partially_paid']);
+
+        expect(fn () => DB::table('payment_allocations')
+            ->where('payment_id', $fixture['paymentId'])
+            ->where('invoice_id', $fixture['invoiceId'])
+            ->update(['amount' => '400000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('payment_allocations')
+            ->where('payment_id', $fixture['paymentId'])
+            ->where('invoice_id', $fixture['invoiceId'])
+            ->delete()
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('payment_allocations')
+                ->where('payment_id', $fixture['paymentId'])
+                ->where('invoice_id', $fixture['invoiceId'])
+                ->value('amount')
+        )->toBe('500000.0000');
+
+        expect(
+            DB::table('invoices')
+                ->where('id', $fixture['invoiceId'])
+                ->value('status')
+        )->toBe('partially_paid');
+    });
+});
