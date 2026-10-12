@@ -165,6 +165,50 @@ return new class extends Migration
             EXECUTE FUNCTION terra_validate_invoice_contract()
             SQL);
 
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_invoice_total_after_activity()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                allocated_amount NUMERIC(20,4);
+                issued_credit_amount NUMERIC(20,4);
+            BEGIN
+                IF NEW.total IS NOT DISTINCT FROM OLD.total THEN
+                    RETURN NEW;
+                END IF;
+
+                SELECT COALESCE(SUM(amount), 0)
+                INTO allocated_amount
+                FROM payment_allocations
+                WHERE invoice_id = OLD.id;
+
+                SELECT COALESCE(SUM(total), 0)
+                INTO issued_credit_amount
+                FROM credit_notes
+                WHERE invoice_id = OLD.id
+                  AND status = 'issued';
+
+                IF allocated_amount + issued_credit_amount > NEW.total THEN
+                    RAISE EXCEPTION
+                        'Invoice % total cannot be reduced below allocated payments and issued credit notes.',
+                        OLD.id
+                        USING ERRCODE = '23514';
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_protect_invoice_total_after_activity_trigger
+            BEFORE UPDATE OF total ON invoices
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_invoice_total_after_activity()
+            SQL);
+
+
         /*
          * Payment
          *
@@ -285,6 +329,82 @@ return new class extends Migration
             FOR EACH ROW
             EXECUTE FUNCTION terra_validate_payment_financial()
             SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_original_payment_with_refunds()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                active_refund_amount NUMERIC(20,4);
+                has_active_refunds BOOLEAN;
+            BEGIN
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM payments
+                    WHERE refund_of = OLD.id
+                      AND direction = 'outgoing'
+                      AND type = 'refund'
+                      AND status IN ('pending', 'confirmed')
+                )
+                INTO has_active_refunds;
+
+                IF NOT has_active_refunds THEN
+                    RETURN NEW;
+                END IF;
+
+                SELECT COALESCE(SUM(amount), 0)
+                INTO active_refund_amount
+                FROM payments
+                WHERE refund_of = OLD.id
+                  AND direction = 'outgoing'
+                  AND type = 'refund'
+                  AND status IN ('pending', 'confirmed');
+
+                IF NEW.direction <> 'incoming' THEN
+                    RAISE EXCEPTION
+                        'A payment referenced by active refunds must remain incoming.'
+                        USING ERRCODE = '55006';
+                END IF;
+
+                IF NEW.status <> 'confirmed' THEN
+                    RAISE EXCEPTION
+                        'A payment referenced by active refunds must remain confirmed.'
+                        USING ERRCODE = '55006';
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1
+                    FROM payments
+                    WHERE refund_of = OLD.id
+                      AND direction = 'outgoing'
+                      AND type = 'refund'
+                      AND status IN ('pending', 'confirmed')
+                      AND currency IS DISTINCT FROM NEW.currency
+                ) THEN
+                    RAISE EXCEPTION
+                        'Original payment currency must match its active refunds.'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                IF NEW.amount < active_refund_amount THEN
+                    RAISE EXCEPTION
+                        'Original payment amount cannot be less than its active refunds.'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_protect_original_payment_with_refunds_trigger
+            BEFORE UPDATE OF amount, currency, direction, status ON payments
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_original_payment_with_refunds()
+            SQL);
+
 
         /*
          * PaymentAllocation
@@ -534,6 +654,20 @@ return new class extends Migration
 
     public function down(): void
     {
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_protect_original_payment_with_refunds_trigger ON payments'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_original_payment_with_refunds()'
+        );
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_protect_invoice_total_after_activity_trigger ON invoices'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_invoice_total_after_activity()'
+        );
+
         DB::statement(
             'DROP TRIGGER IF EXISTS terra_validate_credit_note_financial_trigger ON credit_notes'
         );

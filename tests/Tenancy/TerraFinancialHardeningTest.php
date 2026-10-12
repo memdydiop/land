@@ -330,3 +330,113 @@ test('payment allocation state validation locks the payment row', function () {
             ->and(strtolower($definition->definition))->toContain('for update');
     });
 });
+
+
+test('invoice total cannot be reduced below allocations and issued credit notes', function () {
+    $tenant = $this->testTenant('terra_invoice_total_financial_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        DB::table('payment_allocations')->insert([
+            'id' => (string) Str::ulid(),
+            'payment_id' => $fixture['paymentId'],
+            'invoice_id' => $fixture['invoiceId'],
+            'amount' => '600000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        DB::table('credit_notes')->insert([
+            'id' => (string) Str::ulid(),
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-N-'.Str::upper(Str::random(10)),
+            'status' => 'issued',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => now(),
+            'reason' => 'Invoice total integrity test',
+            'subtotal' => '200000.0000',
+            'tax' => '0.0000',
+            'total' => '200000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // 600,000 allocated + 200,000 of issued credit notes.
+        // Reducing the invoice to 700,000 would break the invariant.
+        expect(fn () => DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['total' => '700000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('invoices')
+                ->where('id', $fixture['invoiceId'])
+                ->value('total')
+        )->toBe('1000000.0000');
+    });
+});
+
+test('original payment cannot be reduced or invalidated while active refunds exist', function () {
+    $tenant = $this->testTenant('terra_original_payment_refund_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        DB::table('payments')->insert([
+            'id' => (string) Str::ulid(),
+            'reservation_id' => $reservationId,
+            'amount' => '400000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => $fixture['paymentId'],
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['amount' => '300000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'cancelled'])
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('payments')
+                ->where('id', $fixture['paymentId'])
+                ->value('amount')
+        )->toBe('1000000.0000');
+
+        expect(
+            DB::table('payments')
+                ->where('id', $fixture['paymentId'])
+                ->value('status')
+        )->toBe('confirmed');
+    });
+});
