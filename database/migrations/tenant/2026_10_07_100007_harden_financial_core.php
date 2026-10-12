@@ -784,6 +784,29 @@ return new class extends Migration
                 issued_credit_amount NUMERIC(20,4);
                 allocated_payment_amount NUMERIC(20,4);
             BEGIN
+                IF TG_OP = 'UPDATE' THEN
+                    IF NEW.status IS DISTINCT FROM OLD.status THEN
+                        IF OLD.status IN ('issued', 'cancelled') THEN
+                            RAISE EXCEPTION
+                                'Credit note in terminal status % cannot change to %.',
+                                OLD.status,
+                                NEW.status
+                                USING ERRCODE = '55006';
+                        ELSIF OLD.status = 'draft'
+                              AND NEW.status NOT IN ('issued', 'cancelled')
+                        THEN
+                            RAISE EXCEPTION
+                                'A draft credit note can only be issued or cancelled.'
+                                USING ERRCODE = '23514';
+                        END IF;
+                    END IF;
+                END IF;
+
+                IF NEW.status = 'issued' THEN
+                    NEW.issued_at := COALESCE(NEW.issued_at, now());
+                    NEW.immutable_at := COALESCE(NEW.immutable_at, now());
+                END IF;
+
                 SELECT total, currency
                 INTO invoice_total, invoice_currency
                 FROM invoices
@@ -844,6 +867,211 @@ return new class extends Migration
             EXECUTE FUNCTION terra_validate_credit_note_financial()
             SQL
         );
+
+
+        // Issued and cancelled credit notes retain their fiscal identity.
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_credit_note_content()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    IF OLD.status IN ('issued', 'cancelled')
+                       OR OLD.immutable_at IS NOT NULL
+                    THEN
+                        RAISE EXCEPTION
+                            'Issued, cancelled or immutable credit note % cannot be deleted.',
+                            OLD.id
+                            USING ERRCODE = '55006';
+                    END IF;
+
+                    RETURN OLD;
+                END IF;
+
+                IF TG_OP = 'UPDATE' THEN
+                    IF OLD.status IN ('issued', 'cancelled')
+                       OR OLD.immutable_at IS NOT NULL
+                    THEN
+                        IF (
+                            OLD.immutable_at IS NOT NULL
+                            AND NEW.immutable_at IS DISTINCT FROM OLD.immutable_at
+                        ) OR ROW(
+                            NEW.client_party_id,
+                            NEW.invoice_id,
+                            NEW.reference,
+                            NEW.credit_note_number,
+                            NEW.issue_date,
+                            NEW.issued_at,
+                            NEW.reason,
+                            NEW.subtotal,
+                            NEW.tax,
+                            NEW.total,
+                            NEW.currency
+                        ) IS DISTINCT FROM ROW(
+                            OLD.client_party_id,
+                            OLD.invoice_id,
+                            OLD.reference,
+                            OLD.credit_note_number,
+                            OLD.issue_date,
+                            OLD.issued_at,
+                            OLD.reason,
+                            OLD.subtotal,
+                            OLD.tax,
+                            OLD.total,
+                            OLD.currency
+                        )
+                        THEN
+                            RAISE EXCEPTION
+                                'Credit note % fiscal content is immutable.',
+                                OLD.id
+                                USING ERRCODE = '55006';
+                        END IF;
+                    ELSIF NEW.immutable_at IS NOT NULL
+                          OR NEW.status = 'cancelled'
+                    THEN
+                        IF OLD.status = 'draft'
+                           AND NEW.status = 'issued'
+                        THEN
+                            -- issued_at may be set during issuance, but the
+                            -- rest of the fiscal content must remain unchanged.
+                            IF ROW(
+                                NEW.client_party_id,
+                                NEW.invoice_id,
+                                NEW.reference,
+                                NEW.credit_note_number,
+                                NEW.issue_date,
+                                NEW.reason,
+                                NEW.subtotal,
+                                NEW.tax,
+                                NEW.total,
+                                NEW.currency
+                            ) IS DISTINCT FROM ROW(
+                                OLD.client_party_id,
+                                OLD.invoice_id,
+                                OLD.reference,
+                                OLD.credit_note_number,
+                                OLD.issue_date,
+                                OLD.reason,
+                                OLD.subtotal,
+                                OLD.tax,
+                                OLD.total,
+                                OLD.currency
+                            )
+                            THEN
+                                RAISE EXCEPTION
+                                    'Credit note % content cannot change during issuance.',
+                                    OLD.id
+                                    USING ERRCODE = '55006';
+                            END IF;
+                        ELSIF ROW(
+                            NEW.client_party_id,
+                            NEW.invoice_id,
+                            NEW.reference,
+                            NEW.credit_note_number,
+                            NEW.issue_date,
+                            NEW.issued_at,
+                            NEW.reason,
+                            NEW.subtotal,
+                            NEW.tax,
+                            NEW.total,
+                            NEW.currency
+                        ) IS DISTINCT FROM ROW(
+                            OLD.client_party_id,
+                            OLD.invoice_id,
+                            OLD.reference,
+                            OLD.credit_note_number,
+                            OLD.issue_date,
+                            OLD.issued_at,
+                            OLD.reason,
+                            OLD.subtotal,
+                            OLD.tax,
+                            OLD.total,
+                            OLD.currency
+                        )
+                        THEN
+                            RAISE EXCEPTION
+                                'Immutable credit note % content cannot change.',
+                                OLD.id
+                                USING ERRCODE = '55006';
+                        END IF;
+                    END IF;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_z_protect_credit_note_content_trigger
+            BEFORE UPDATE OR DELETE ON credit_notes
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_credit_note_content()
+            SQL);
+
+        // A credit note's detail lines cannot be changed once its parent
+        // is issued, cancelled or explicitly marked immutable.
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_credit_note_item_content()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                target_credit_note_id TEXT;
+                note_status TEXT;
+                note_immutable_at TIMESTAMPTZ;
+            BEGIN
+                IF TG_OP = 'UPDATE'
+                   AND NEW.credit_note_id IS DISTINCT FROM OLD.credit_note_id
+                THEN
+                    RAISE EXCEPTION
+                        'A credit note item cannot be moved to another credit note.'
+                        USING ERRCODE = '55006';
+                END IF;
+
+                IF TG_OP = 'DELETE' THEN
+                    target_credit_note_id := OLD.credit_note_id::text;
+                ELSE
+                    target_credit_note_id := NEW.credit_note_id::text;
+                END IF;
+
+                SELECT status, immutable_at
+                INTO note_status, note_immutable_at
+                FROM credit_notes
+                WHERE id = target_credit_note_id
+                FOR UPDATE;
+
+                -- During a permitted cascade from a deletable draft note,
+                -- its parent may already be invisible to this query.
+                IF FOUND
+                   AND (
+                       note_status IN ('issued', 'cancelled')
+                       OR note_immutable_at IS NOT NULL
+                   )
+                THEN
+                    RAISE EXCEPTION
+                        'Credit note % is not editable.',
+                        target_credit_note_id
+                        USING ERRCODE = '55006';
+                END IF;
+
+                IF TG_OP = 'DELETE' THEN
+                    RETURN OLD;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_protect_credit_note_item_content_trigger
+            BEFORE INSERT OR UPDATE OR DELETE ON credit_note_items
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_credit_note_item_content()
+            SQL);
+
     }
 
     public function down(): void
@@ -874,6 +1102,20 @@ return new class extends Migration
         );
         DB::statement(
             'DROP FUNCTION IF EXISTS terra_protect_invoice_total_after_activity()'
+        );
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_protect_credit_note_item_content_trigger ON credit_note_items'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_credit_note_item_content()'
+        );
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_z_protect_credit_note_content_trigger ON credit_notes'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_credit_note_content()'
         );
 
         DB::statement(

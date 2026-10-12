@@ -534,3 +534,140 @@ test('immutable invoice content cannot be edited or deleted', function () {
         )->toThrow(QueryException::class);
     });
 });
+
+
+test('issued credit notes become immutable with frozen detail lines', function () {
+    $tenant = $this->testTenant('terra_credit_note_lifecycle_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        $creditNoteId = (string) Str::ulid();
+        $itemId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-N-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Credit note lifecycle test',
+            'subtotal' => '200000.0000',
+            'tax' => '0.0000',
+            'total' => '200000.0000',
+            'currency' => 'XOF',
+            'immutable_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => $itemId,
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Initial credit note line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '200000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '200000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update([
+                'status' => 'issued',
+                'updated_at' => now(),
+            ]);
+
+        expect(
+            DB::table('credit_notes')
+                ->where('id', $creditNoteId)
+                ->value('immutable_at')
+        )->not->toBeNull();
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'cancelled'])
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['total' => '150000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('credit_note_items')
+            ->where('id', $itemId)
+            ->update(['total' => '150000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('credit_note_items')
+            ->where('id', $itemId)
+            ->delete()
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->delete()
+        )->toThrow(QueryException::class);
+    });
+});
+
+test('cancelled credit notes cannot be reopened', function () {
+    $tenant = $this->testTenant('terra_cancelled_credit_note_terminal');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        $creditNoteId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-N-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Cancelled credit note test',
+            'subtotal' => '100000.0000',
+            'tax' => '0.0000',
+            'total' => '100000.0000',
+            'currency' => 'XOF',
+            'immutable_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // L'annulation ne doit pas permettre de modifier le contenu
+        // fiscal dans la même requête.
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update([
+                'status' => 'cancelled',
+                'total' => '90000.0000',
+            ])
+        )->toThrow(QueryException::class);
+
+        // L'annulation seule reste autorisée depuis l'état draft.
+        DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'cancelled']);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'issued'])
+        )->toThrow(QueryException::class);
+    });
+});
