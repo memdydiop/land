@@ -209,6 +209,200 @@ return new class extends Migration
             SQL);
 
 
+
+        // Invoice lifecycle: enforce transitions and consistency with settlement.
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_validate_invoice_lifecycle()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                allocated_amount NUMERIC(20,4);
+                issued_credit_amount NUMERIC(20,4);
+            BEGIN
+                IF TG_OP = 'UPDATE' THEN
+                    IF NEW.status IS DISTINCT FROM OLD.status THEN
+                        IF OLD.status IN ('paid', 'cancelled') THEN
+                            RAISE EXCEPTION
+                                'Invoice in terminal status % cannot change to %.',
+                                OLD.status,
+                                NEW.status
+                                USING ERRCODE = '55006';
+                        ELSIF OLD.status = 'draft'
+                              AND NEW.status NOT IN ('issued', 'cancelled')
+                        THEN
+                            RAISE EXCEPTION
+                                'A draft invoice can only be issued or cancelled.'
+                                USING ERRCODE = '23514';
+                        ELSIF OLD.status = 'issued'
+                              AND NEW.status NOT IN (
+                                  'partially_paid', 'paid', 'overdue', 'cancelled'
+                              )
+                        THEN
+                            RAISE EXCEPTION
+                                'An issued invoice cannot return to draft.'
+                                USING ERRCODE = '23514';
+                        ELSIF OLD.status = 'partially_paid'
+                              AND NEW.status NOT IN ('paid', 'overdue')
+                        THEN
+                            RAISE EXCEPTION
+                                'A partially paid invoice can only become paid or overdue.'
+                                USING ERRCODE = '23514';
+                        ELSIF OLD.status = 'overdue'
+                              AND NEW.status NOT IN (
+                                  'partially_paid', 'paid', 'cancelled'
+                              )
+                        THEN
+                            RAISE EXCEPTION
+                                'An overdue invoice can only become partially paid, paid or cancelled.'
+                                USING ERRCODE = '23514';
+                        END IF;
+                    END IF;
+                END IF;
+
+                SELECT COALESCE(SUM(amount), 0)
+                INTO allocated_amount
+                FROM payment_allocations
+                WHERE invoice_id = NEW.id;
+
+                SELECT COALESCE(SUM(total), 0)
+                INTO issued_credit_amount
+                FROM credit_notes
+                WHERE invoice_id = NEW.id
+                  AND status = 'issued';
+
+                IF NEW.status = 'paid'
+                   AND allocated_amount + issued_credit_amount < NEW.total
+                THEN
+                    RAISE EXCEPTION
+                        'Invoice % cannot be marked paid while an amount remains collectible.',
+                        NEW.id
+                        USING ERRCODE = '23514';
+                END IF;
+
+                IF NEW.status = 'partially_paid'
+                   AND (
+                       allocated_amount <= 0
+                       OR allocated_amount + issued_credit_amount >= NEW.total
+                   )
+                THEN
+                    RAISE EXCEPTION
+                        'Invoice % requires an outstanding balance to be partially paid.',
+                        NEW.id
+                        USING ERRCODE = '23514';
+                END IF;
+
+                IF NEW.status = 'cancelled'
+                   AND (
+                       allocated_amount > 0
+                       OR issued_credit_amount > 0
+                   )
+                THEN
+                    RAISE EXCEPTION
+                        'Invoice % with allocations or issued credit notes cannot be cancelled.',
+                        NEW.id
+                        USING ERRCODE = '55006';
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_validate_invoice_lifecycle_trigger
+            BEFORE INSERT OR UPDATE OF status, total ON invoices
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_validate_invoice_lifecycle()
+            SQL);
+
+        // Once immutable_at is set, freeze document and fiscal content.
+        // Operational status may still change under the lifecycle guard.
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_immutable_invoice_content()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    IF OLD.immutable_at IS NOT NULL THEN
+                        RAISE EXCEPTION
+                            'Immutable invoice % cannot be deleted.',
+                            OLD.id
+                            USING ERRCODE = '55006';
+                    END IF;
+
+                    RETURN OLD;
+                END IF;
+
+                IF TG_OP = 'UPDATE'
+                   AND (
+                       OLD.immutable_at IS NOT NULL
+                       OR NEW.immutable_at IS NOT NULL
+                   )
+                THEN
+                    IF (
+                        OLD.immutable_at IS NOT NULL
+                        AND NEW.immutable_at IS DISTINCT FROM OLD.immutable_at
+                    ) OR ROW(
+                           NEW.client_party_id,
+                           NEW.project_id,
+                           NEW.contract_id,
+                           NEW.work_situation_id,
+                           NEW.schedule_item_id,
+                           NEW.reference,
+                           NEW.invoice_number,
+                           NEW.invoice_type,
+                           NEW.numbering_year,
+                           NEW.issue_date,
+                           NEW.issued_at,
+                           NEW.due_date,
+                           NEW.subtotal,
+                           NEW.tax,
+                           NEW.retention_amount,
+                           NEW.net_amount,
+                           NEW.total,
+                           NEW.currency
+                       ) IS DISTINCT FROM ROW(
+                           OLD.client_party_id,
+                           OLD.project_id,
+                           OLD.contract_id,
+                           OLD.work_situation_id,
+                           OLD.schedule_item_id,
+                           OLD.reference,
+                           OLD.invoice_number,
+                           OLD.invoice_type,
+                           OLD.numbering_year,
+                           OLD.issue_date,
+                           OLD.issued_at,
+                           OLD.due_date,
+                           OLD.subtotal,
+                           OLD.tax,
+                           OLD.retention_amount,
+                           OLD.net_amount,
+                           OLD.total,
+                           OLD.currency
+                       )
+                    THEN
+                        RAISE EXCEPTION
+                            'Immutable invoice % content cannot be changed.',
+                            OLD.id
+                            USING ERRCODE = '55006';
+                    END IF;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_protect_immutable_invoice_content_trigger
+            BEFORE UPDATE OR DELETE ON invoices
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_immutable_invoice_content()
+            SQL);
+
         /*
          * Payment
          *
@@ -659,6 +853,20 @@ return new class extends Migration
         );
         DB::statement(
             'DROP FUNCTION IF EXISTS terra_protect_original_payment_with_refunds()'
+        );
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_protect_immutable_invoice_content_trigger ON invoices'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_immutable_invoice_content()'
+        );
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_validate_invoice_lifecycle_trigger ON invoices'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_validate_invoice_lifecycle()'
         );
 
         DB::statement(

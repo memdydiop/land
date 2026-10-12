@@ -440,3 +440,97 @@ test('original payment cannot be reduced or invalidated while active refunds exi
         )->toBe('confirmed');
     });
 });
+
+
+test('invoice paid status requires settlement and cannot regress', function () {
+    $tenant = $this->testTenant('terra_invoice_paid_lifecycle');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        // An unpaid invoice cannot be marked paid.
+        expect(fn () => DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['status' => 'paid'])
+        )->toThrow(QueryException::class);
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        DB::table('payment_allocations')->insert([
+            'id' => (string) Str::ulid(),
+            'payment_id' => $fixture['paymentId'],
+            'invoice_id' => $fixture['invoiceId'],
+            'amount' => '1000000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // Full settlement permits paid.
+        DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['status' => 'paid']);
+
+        // Paid is terminal; corrections use credit notes/refunds.
+        expect(fn () => DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['status' => 'issued'])
+        )->toThrow(QueryException::class);
+    });
+});
+
+test('cancelled invoice cannot be reopened', function () {
+    $tenant = $this->testTenant('terra_invoice_cancelled_terminal');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['status' => 'cancelled']);
+
+        expect(fn () => DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['status' => 'issued'])
+        )->toThrow(QueryException::class);
+    });
+});
+
+test('immutable invoice content cannot be edited or deleted', function () {
+    $tenant = $this->testTenant('terra_invoice_immutable_content');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        // Setting immutable_at and changing fiscal content in one UPDATE
+        // must not bypass the immutability guard.
+        expect(fn () => DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update([
+                'immutable_at' => now(),
+                'total' => '900000.0000',
+            ])
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('invoices')
+                ->where('id', $fixture['invoiceId'])
+                ->value('total')
+        )->toBe('1000000.0000');
+
+        DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['immutable_at' => now()]);
+
+        expect(fn () => DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->update(['total' => '900000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(fn () => DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->delete()
+        )->toThrow(QueryException::class);
+    });
+});
