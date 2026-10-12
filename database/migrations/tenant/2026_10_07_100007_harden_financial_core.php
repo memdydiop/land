@@ -524,6 +524,106 @@ return new class extends Migration
             EXECUTE FUNCTION terra_validate_payment_financial()
             SQL);
 
+        // Preserve refund traceability and enforce its lifecycle.
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_protect_active_refund_lifecycle()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    IF OLD.direction = 'outgoing' AND OLD.type = 'refund' THEN
+                        RAISE EXCEPTION
+                            'Refund % cannot be deleted; retain its audit history.',
+                            OLD.id
+                            USING ERRCODE = '55006';
+                    END IF;
+
+                    RETURN OLD;
+                END IF;
+
+                IF NEW.direction = 'outgoing'
+                   AND NEW.type = 'refund'
+                   AND NOT (
+                       OLD.direction = 'outgoing'
+                       AND OLD.type = 'refund'
+                   )
+                THEN
+                    RAISE EXCEPTION
+                        'Payment % cannot be reclassified as a refund; create a dedicated refund record.',
+                        OLD.id
+                        USING ERRCODE = '55006';
+                END IF;
+
+                IF OLD.direction = 'outgoing' AND OLD.type = 'refund' THEN
+                    IF ROW(
+                        NEW.direction,
+                        NEW.type,
+                        NEW.refund_of,
+                        NEW.currency
+                    ) IS DISTINCT FROM ROW(
+                        OLD.direction,
+                        OLD.type,
+                        OLD.refund_of,
+                        OLD.currency
+                    )
+                    THEN
+                        RAISE EXCEPTION
+                            'Refund % financial identity cannot be reclassified or detached.',
+                            OLD.id
+                            USING ERRCODE = '55006';
+                    END IF;
+
+                    IF (OLD.status <> 'pending' OR NEW.status <> 'pending')
+                       AND NEW.amount IS DISTINCT FROM OLD.amount
+                    THEN
+                        RAISE EXCEPTION
+                            'Refund % amount is immutable after leaving pending status.',
+                            OLD.id
+                            USING ERRCODE = '55006';
+                    END IF;
+
+                    IF OLD.status = 'pending'
+                       AND NEW.status NOT IN (
+                           'pending', 'confirmed', 'failed', 'cancelled'
+                       )
+                    THEN
+                        RAISE EXCEPTION
+                            'Pending refund % has an invalid status transition to %.',
+                            OLD.id,
+                            NEW.status
+                            USING ERRCODE = '23514';
+                    ELSIF OLD.status = 'confirmed'
+                          AND NEW.status NOT IN ('confirmed', 'reversed')
+                    THEN
+                        RAISE EXCEPTION
+                            'Confirmed refund % can only remain confirmed or be reversed.',
+                            OLD.id
+                            USING ERRCODE = '23514';
+                    ELSIF OLD.status IN ('failed', 'cancelled', 'reversed')
+                          AND NEW.status IS DISTINCT FROM OLD.status
+                    THEN
+                        RAISE EXCEPTION
+                            'Terminal refund % cannot change status from % to %.',
+                            OLD.id,
+                            OLD.status,
+                            NEW.status
+                            USING ERRCODE = '55006';
+                    END IF;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_protect_active_refund_lifecycle_trigger
+            BEFORE UPDATE OR DELETE ON payments
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_protect_active_refund_lifecycle()
+            SQL);
+
         DB::statement(<<<'SQL'
             CREATE OR REPLACE FUNCTION terra_protect_original_payment_with_refunds()
             RETURNS trigger
@@ -1286,6 +1386,13 @@ return new class extends Migration
             'DROP TRIGGER IF EXISTS terra_validate_payment_allocation_trigger ON payment_allocations'
         );
         DB::statement('DROP FUNCTION IF EXISTS terra_validate_payment_allocation()');
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_protect_active_refund_lifecycle_trigger ON payments'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_protect_active_refund_lifecycle()'
+        );
 
         DB::statement(
             'DROP TRIGGER IF EXISTS terra_validate_payment_financial_trigger ON payments'

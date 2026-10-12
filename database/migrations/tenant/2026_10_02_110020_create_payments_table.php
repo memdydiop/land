@@ -48,7 +48,7 @@ return new class extends Migration
         DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_currency_xof_check CHECK (currency = 'XOF')");
         DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_direction_check CHECK (direction IN ('incoming','outgoing'))");
         DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_type_check CHECK (type IN ('deposit','invoice_payment','installment','refund','other'))");
-        DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_refund_reference_check CHECK (refund_of IS NULL OR (direction = 'outgoing' AND type = 'refund'))");
+        DB::statement("ALTER TABLE payments ADD CONSTRAINT payments_refund_reference_check CHECK ((type = 'refund' AND direction = 'outgoing' AND refund_of IS NOT NULL) OR (type <> 'refund' AND refund_of IS NULL))");
     }
 
     public function down(): void

@@ -773,3 +773,323 @@ test('allocation backing a partially paid invoice cannot be reduced or deleted',
         )->toBe('partially_paid');
     });
 });
+
+
+test('refund payments require an original payment reference', function () {
+    $tenant = $this->testTenant('terra_refund_requires_original_payment');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        expect(fn () => DB::table('payments')->insert([
+            'id' => (string) Str::ulid(),
+            'reservation_id' => $reservationId,
+            'amount' => '100000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => null,
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]))->toThrow(QueryException::class);
+    });
+});
+
+
+test('active refunds cannot be reclassified without their original payment', function () {
+    $tenant = $this->testTenant('terra_active_refund_reclassification_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $refundId = (string) Str::ulid();
+
+        DB::table('payments')->insert([
+            'id' => $refundId,
+            'reservation_id' => $reservationId,
+            'amount' => '400000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => $fixture['paymentId'],
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('payments')
+            ->where('id', $refundId)
+            ->update([
+                'type' => 'other',
+                'refund_of' => null,
+            ])
+        )->toThrow(QueryException::class);
+    });
+});
+
+
+test('active refunds cannot be deleted directly', function () {
+    $tenant = $this->testTenant('terra_active_refund_delete_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $refundId = (string) Str::ulid();
+
+        DB::table('payments')->insert([
+            'id' => $refundId,
+            'reservation_id' => $reservationId,
+            'amount' => '400000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => $fixture['paymentId'],
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('payments')
+            ->where('id', $refundId)
+            ->delete()
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('payments')
+                ->where('id', $refundId)
+                ->exists()
+        )->toBeTrue();
+    });
+});
+
+
+test('pending refunds can be cancelled without losing their original reference', function () {
+    $tenant = $this->testTenant('terra_pending_refund_cancellation');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $refundId = (string) Str::ulid();
+
+        DB::table('payments')->insert([
+            'id' => $refundId,
+            'reservation_id' => $reservationId,
+            'amount' => '400000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => $fixture['paymentId'],
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('payments')
+            ->where('id', $refundId)
+            ->update(['status' => 'cancelled']);
+
+        $refund = DB::table('payments')
+            ->where('id', $refundId)
+            ->first();
+
+        expect($refund->status)->toBe('cancelled')
+            ->and($refund->refund_of)->toBe($fixture['paymentId'])
+            ->and($refund->type)->toBe('refund');
+    });
+});
+
+test('ordinary payments cannot be converted into refunds', function () {
+    $tenant = $this->testTenant('terra_payment_refund_reclassification');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $ordinaryPaymentId = (string) Str::ulid();
+
+        DB::table('payments')->insert([
+            'id' => $ordinaryPaymentId,
+            'reservation_id' => $reservationId,
+            'amount' => '100000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'other',
+            'method' => 'bank_transfer',
+            'refund_of' => null,
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('payments')
+            ->where('id', $ordinaryPaymentId)
+            ->update([
+                'type' => 'refund',
+                'refund_of' => $fixture['paymentId'],
+            ])
+        )->toThrow(QueryException::class);
+
+        $payment = DB::table('payments')
+            ->where('id', $ordinaryPaymentId)
+            ->first();
+
+        expect($payment->type)->toBe('other')
+            ->and($payment->refund_of)->toBeNull();
+    });
+});
+
+
+test('cancelled refund records cannot be deleted', function () {
+    $tenant = $this->testTenant('terra_cancelled_refund_delete_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $refundId = (string) Str::ulid();
+
+        DB::table('payments')->insert([
+            'id' => $refundId,
+            'reservation_id' => $reservationId,
+            'amount' => '400000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => $fixture['paymentId'],
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('payments')
+            ->where('id', $refundId)
+            ->update(['status' => 'cancelled']);
+
+        expect(fn () => DB::table('payments')
+            ->where('id', $refundId)
+            ->delete()
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('payments')
+                ->where('id', $refundId)
+                ->exists()
+        )->toBeTrue();
+    });
+});
+
+
+test('confirmed refund amounts are immutable', function () {
+    $tenant = $this->testTenant('terra_confirmed_refund_amount_guard');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $refundId = (string) Str::ulid();
+
+        DB::table('payments')->insert([
+            'id' => $refundId,
+            'reservation_id' => $reservationId,
+            'amount' => '400000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => $fixture['paymentId'],
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // Le montant ne peut pas changer dans la même requête que la confirmation.
+        expect(fn () => DB::table('payments')
+            ->where('id', $refundId)
+            ->update([
+                'status' => 'confirmed',
+                'amount' => '500000.0000',
+            ])
+        )->toThrow(QueryException::class);
+
+        DB::table('payments')
+            ->where('id', $refundId)
+            ->update(['status' => 'confirmed']);
+
+        expect(fn () => DB::table('payments')
+            ->where('id', $refundId)
+            ->update(['amount' => '500000.0000'])
+        )->toThrow(QueryException::class);
+
+        expect(
+            DB::table('payments')
+                ->where('id', $refundId)
+                ->value('amount')
+        )->toBe('400000.0000');
+    });
+});
