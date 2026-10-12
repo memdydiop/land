@@ -74,10 +74,11 @@ return new class extends Migration
                        SELECT 1
                        FROM sales
                        WHERE reservation_id = NEW.id
+                         AND status IN ('confirmed', 'completed')
                    )
                 THEN
                     RAISE EXCEPTION
-                        'A converted reservation must have a linked sale.'
+                        'A converted reservation must have a confirmed or completed sale.'
                         USING ERRCODE = '23514';
                 END IF;
 
@@ -702,6 +703,58 @@ return new class extends Migration
             FOR EACH ROW
             EXECUTE FUNCTION terra_guard_hierarchical_sale_conflicts()
             SQL);
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION terra_preserve_converted_reservation_sale_link()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+                reservation_status TEXT;
+            BEGIN
+                SELECT status
+                INTO reservation_status
+                FROM reservations
+                WHERE id = OLD.reservation_id
+                FOR UPDATE;
+
+                IF TG_OP = 'DELETE' THEN
+                    IF FOUND AND reservation_status = 'converted' THEN
+                        RAISE EXCEPTION
+                            'A sale linked to a converted reservation cannot be deleted.'
+                            USING ERRCODE = '55006';
+                    END IF;
+
+                    RETURN OLD;
+                END IF;
+
+                IF FOUND
+                   AND reservation_status = 'converted'
+                   AND NEW.reservation_id IS DISTINCT FROM OLD.reservation_id
+                THEN
+                    RAISE EXCEPTION
+                        'A sale linked to a converted reservation cannot be reassigned.'
+                        USING ERRCODE = '55006';
+                END IF;
+
+                RETURN NEW;
+            END;
+            $function$
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_z_preserve_converted_sale_link_update
+            BEFORE UPDATE OF reservation_id ON sales
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_preserve_converted_reservation_sale_link()
+            SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER terra_z_preserve_converted_sale_link_delete
+            BEFORE DELETE ON sales
+            FOR EACH ROW
+            EXECUTE FUNCTION terra_preserve_converted_reservation_sale_link()
+            SQL);
+
     }
 
     private function addFinancialAllocationGuards(): void
@@ -825,6 +878,16 @@ return new class extends Migration
             'DROP TRIGGER IF EXISTS terra_000_validate_payment_allocation_state ON payment_allocations'
         );
         DB::statement('DROP FUNCTION IF EXISTS terra_validate_payment_allocation_state()');
+
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_z_preserve_converted_sale_link_update ON sales'
+        );
+        DB::statement(
+            'DROP TRIGGER IF EXISTS terra_z_preserve_converted_sale_link_delete ON sales'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS terra_preserve_converted_reservation_sale_link()'
+        );
 
         DB::statement(
             'DROP TRIGGER IF EXISTS terra_000_hierarchical_sale_conflict_guard ON sales'

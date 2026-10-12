@@ -290,6 +290,38 @@ return new class extends Migration
                         USING ERRCODE = '23514';
                 END IF;
 
+                IF TG_OP = 'UPDATE'
+                   AND NEW.status IS DISTINCT FROM OLD.status
+                THEN
+                    IF OLD.status IN ('completed', 'cancelled') THEN
+                        RAISE EXCEPTION
+                            'A sale in terminal status % cannot change to %.',
+                            OLD.status,
+                            NEW.status
+                            USING ERRCODE = '55006';
+                    ELSIF OLD.status = 'draft'
+                          AND NEW.status NOT IN ('confirmed', 'cancelled')
+                    THEN
+                        RAISE EXCEPTION
+                            'A draft sale can only be confirmed or cancelled.'
+                            USING ERRCODE = '23514';
+                    ELSIF OLD.status = 'confirmed'
+                          AND NEW.status NOT IN ('completed', 'cancelled')
+                    THEN
+                        RAISE EXCEPTION
+                            'A confirmed sale can only be completed or cancelled.'
+                            USING ERRCODE = '23514';
+                    END IF;
+                END IF;
+
+                IF NEW.status = 'cancelled'
+                   AND reservation_record.status = 'converted'
+                THEN
+                    RAISE EXCEPTION
+                        'A sale linked to a converted reservation cannot be cancelled.'
+                        USING ERRCODE = '55006';
+                END IF;
+
                 IF NEW.status NOT IN ('confirmed', 'completed') THEN
                     RETURN NEW;
                 END IF;

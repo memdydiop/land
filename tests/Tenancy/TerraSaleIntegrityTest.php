@@ -79,7 +79,7 @@ test('sale is created from a confirmed reservation and freezes converted offer i
             'buyer_party_id' => $partyId,
             'reference' => 'SALE-'.Str::upper(Str::random(10)),
             'type' => 'land',
-            'status' => 'confirmed',
+            'status' => 'draft',
             'agreed_price' => 20000000,
             'currency' => 'XOF',
             'sold_at' => now(),
@@ -93,12 +93,118 @@ test('sale is created from a confirmed reservation and freezes converted offer i
                 ->value('reservation_id')
         )->toBe($reservationId);
 
+        // A draft sale cannot convert its reservation.
+        expect(fn () => DB::table('reservations')
+            ->where('id', $reservationId)
+            ->update([
+                'status' => 'converted',
+                'updated_at' => now(),
+            ])
+        )->toThrow(QueryException::class);
+
+        // draft -> confirmed is allowed.
+        DB::table('sales')
+            ->where('id', $saleId)
+            ->update([
+                'status' => 'confirmed',
+                'updated_at' => now(),
+            ]);
+
+        // confirmed -> draft is forbidden.
+        expect(fn () => DB::table('sales')
+            ->where('id', $saleId)
+            ->update([
+                'status' => 'draft',
+                'updated_at' => now(),
+            ])
+        )->toThrow(QueryException::class);
+
+        // confirmed -> completed is allowed.
+        DB::table('sales')
+            ->where('id', $saleId)
+            ->update([
+                'status' => 'completed',
+                'updated_at' => now(),
+            ]);
+
+        // completed is terminal.
+        expect(fn () => DB::table('sales')
+            ->where('id', $saleId)
+            ->update([
+                'status' => 'cancelled',
+                'updated_at' => now(),
+            ])
+        )->toThrow(QueryException::class);
+
         DB::table('reservations')
             ->where('id', $reservationId)
             ->update([
                 'status' => 'converted',
                 'updated_at' => now(),
             ]);
+
+        // A converted reservation must retain its linked sale.
+        expect(fn () => DB::table('sales')
+            ->where('id', $saleId)
+            ->delete()
+        )->toThrow(QueryException::class);
+
+        // An unrelated confirmed reservation is used to isolate reassignment.
+        $otherParcelId = (string) Str::ulid();
+        $otherOfferId = (string) Str::ulid();
+        $otherReservationId = (string) Str::ulid();
+
+        DB::table('parcels')->insert([
+            'id' => $otherParcelId,
+            'ilot_id' => null,
+            'reference' => 'PARCEL-'.Str::upper(Str::random(10)),
+            'parcel_number' => 'SALE-ALTERNATE-'.$otherParcelId,
+            'status' => 'provisional',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('commercial_offers')->insert([
+            'id' => $otherOfferId,
+            'reference' => 'OFFER-'.Str::upper(Str::random(10)),
+            'title' => 'Alternate sale test offer',
+            'price' => 20000000,
+            'currency' => 'XOF',
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('commercial_offer_items')->insert([
+            'id' => (string) Str::ulid(),
+            'commercial_offer_id' => $otherOfferId,
+            'parcel_id' => $otherParcelId,
+            'position' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('reservations')->insert([
+            'id' => $otherReservationId,
+            'commercial_offer_id' => $otherOfferId,
+            'party_id' => $partyId,
+            'reference' => 'RES-'.Str::upper(Str::random(10)),
+            'status' => 'confirmed',
+            'reserved_at' => now(),
+            'agreed_price' => 20000000,
+            'deposit_amount' => 1000000,
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('sales')
+            ->where('id', $saleId)
+            ->update([
+                'reservation_id' => $otherReservationId,
+                'updated_at' => now(),
+            ])
+        )->toThrow(QueryException::class);
 
         // A converted reservation must remain the durable lock behind its sale.
         expect(fn () => DB::table('reservations')
