@@ -344,8 +344,10 @@ test('refunds cannot exceed the original confirmed incoming payment', function (
             'updated_at' => now(),
         ]);
 
+        $firstRefundId = (string) Str::ulid();
+
         DB::table('payments')->insert([
-            'id' => (string) Str::ulid(),
+            'id' => $firstRefundId,
             'reservation_id' => $context['reservationId'],
             'amount' => '400000.0000',
             'currency' => 'XOF',
@@ -353,11 +355,18 @@ test('refunds cannot exceed the original confirmed incoming payment', function (
             'type' => 'refund',
             'method' => 'bank_transfer',
             'refund_of' => $originalPaymentId,
-            'status' => 'confirmed',
-            'paid_at' => now(),
+            'status' => 'pending',
+            'paid_at' => null,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+
+        DB::table('payments')
+            ->where('id', $firstRefundId)
+            ->update([
+                'status' => 'confirmed',
+                'paid_at' => now(),
+            ]);
 
         expect(fn () => DB::table('payments')->insert([
             'id' => (string) Str::ulid(),
@@ -368,8 +377,8 @@ test('refunds cannot exceed the original confirmed incoming payment', function (
             'type' => 'refund',
             'method' => 'bank_transfer',
             'refund_of' => $originalPaymentId,
-            'status' => 'confirmed',
-            'paid_at' => now(),
+            'status' => 'pending',
+            'paid_at' => null,
             'created_at' => now(),
             'updated_at' => now(),
         ]))->toThrow(QueryException::class);

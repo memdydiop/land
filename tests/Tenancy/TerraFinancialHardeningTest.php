@@ -849,6 +849,39 @@ test('invoice total cannot be reduced below allocations and issued credit notes'
     });
 });
 
+test('new refunds must start in pending status', function () {
+    $tenant = $this->testTenant('terra_refund_initial_status');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        foreach (['confirmed', 'failed', 'cancelled', 'reversed'] as $status) {
+            expect(fn () => DB::table('payments')->insert([
+                'id' => (string) Str::ulid(),
+                'reservation_id' => $reservationId,
+                'amount' => '100000.0000',
+                'currency' => 'XOF',
+                'direction' => 'outgoing',
+                'type' => 'refund',
+                'method' => 'bank_transfer',
+                'refund_of' => $fixture['paymentId'],
+                'status' => $status,
+                'paid_at' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]))->toThrow(QueryException::class);
+        }
+    });
+});
+
 test('concurrent refund requests serialize on the original payment and cannot exceed its amount', function () {
     $tenant = $this->testTenant('terra_refund_concurrency_cap');
 
