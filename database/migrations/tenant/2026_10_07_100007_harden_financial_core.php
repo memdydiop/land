@@ -1027,6 +1027,8 @@ return new class extends Migration
                 invoice_client_party_id TEXT;
                 issued_credit_amount NUMERIC(20,4);
                 allocated_payment_amount NUMERIC(20,4);
+                detail_total NUMERIC(20,4);
+                detail_line_count BIGINT;
             BEGIN
                 IF TG_OP = 'UPDATE' THEN
                     IF NEW.status IS DISTINCT FROM OLD.status THEN
@@ -1079,6 +1081,35 @@ return new class extends Migration
 
                 IF NEW.status <> 'issued' THEN
                     RETURN NEW;
+                END IF;
+
+                -- An issued credit note must first exist as a draft so that
+                -- detail rows can be recorded against its identifier.
+                IF TG_OP = 'INSERT' THEN
+                    RAISE EXCEPTION
+                        'Credit note must be created as draft and issued only after its detail lines are added.'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                IF NEW.subtotal + NEW.tax IS DISTINCT FROM NEW.total THEN
+                    RAISE EXCEPTION
+                        'Credit note % total must equal subtotal plus tax.',
+                        NEW.id
+                        USING ERRCODE = '23514';
+                END IF;
+
+                SELECT COUNT(*), COALESCE(SUM(total), 0)
+                INTO detail_line_count, detail_total
+                FROM credit_note_items
+                WHERE credit_note_id = NEW.id;
+
+                IF detail_line_count = 0
+                   OR detail_total IS DISTINCT FROM NEW.total
+                THEN
+                    RAISE EXCEPTION
+                        'Credit note % must have detail lines whose total matches the credit note total.',
+                        NEW.id
+                        USING ERRCODE = '23514';
                 END IF;
 
                 SELECT COALESCE(SUM(total), 0)

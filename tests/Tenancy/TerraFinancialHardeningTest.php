@@ -222,6 +222,10 @@ test('issued credit notes must belong to the invoice client', function () {
     $tenant->run(function (): void {
         $fixture = terra5hFinancialFixture();
 
+        $invoiceClientId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
         $otherPartyId = (string) Str::ulid();
 
         DB::table('parties')->insert([
@@ -232,15 +236,17 @@ test('issued credit notes must belong to the invoice client', function () {
             'updated_at' => now(),
         ]);
 
-        expect(fn () => DB::table('credit_notes')->insert([
-            'id' => (string) Str::ulid(),
-            'client_party_id' => $otherPartyId,
+        $creditNoteId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $invoiceClientId,
             'invoice_id' => $fixture['invoiceId'],
             'reference' => 'CN-'.Str::upper(Str::random(10)),
             'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
-            'status' => 'issued',
+            'status' => 'draft',
             'issue_date' => now()->toDateString(),
-            'issued_at' => now(),
+            'issued_at' => null,
             'reason' => 'Client mismatch regression test',
             'subtotal' => '100000.0000',
             'tax' => '0.0000',
@@ -248,7 +254,28 @@ test('issued credit notes must belong to the invoice client', function () {
             'currency' => 'XOF',
             'created_at' => now(),
             'updated_at' => now(),
-        ]))->toThrow(QueryException::class);
+        ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Valid matching detail line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '100000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '100000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update([
+                'client_party_id' => $otherPartyId,
+                'status' => 'issued',
+            ])
+        )->toThrow(QueryException::class);
     });
 });
 
@@ -299,6 +326,140 @@ test('draft credit note client cannot be reassigned to another party', function 
     });
 });
 
+test('issued credit note total must match its detail line totals', function () {
+    $tenant = $this->testTenant('terra_credit_note_detail_total_mismatch');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        $creditNoteId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Credit note detail total regression test',
+            'subtotal' => '200000.0000',
+            'tax' => '0.0000',
+            'total' => '200000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Detail deliberately below the note total',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '100000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '100000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'issued'])
+        )->toThrow(QueryException::class);
+    });
+});
+
+test('issued credit note total must equal subtotal plus tax', function () {
+    $tenant = $this->testTenant('terra_credit_note_subtotal_tax_mismatch');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        $creditNoteId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Credit note arithmetic regression test',
+            'subtotal' => '150000.0000',
+            'tax' => '0.0000',
+            'total' => '200000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Line matching total but not subtotal',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '200000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '200000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'issued'])
+        )->toThrow(QueryException::class);
+    });
+});
+
+test('issued credit notes require at least one detail line', function () {
+    $tenant = $this->testTenant('terra_credit_note_missing_detail_line');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        $creditNoteId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Missing detail line regression test',
+            'subtotal' => '100000.0000',
+            'tax' => '0.0000',
+            'total' => '100000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'issued'])
+        )->toThrow(QueryException::class);
+    });
+});
+
 test('issued credit notes cannot consume an already allocated invoice balance', function () {
     $tenant = $this->testTenant('terra_5h_credit_note_allocation_guard');
 
@@ -318,17 +479,20 @@ test('issued credit notes cannot consume an already allocated invoice balance', 
             'updated_at' => now(),
         ]);
 
-        expect(fn () => DB::table('credit_notes')->insert([
-            'id' => (string) Str::ulid(),
-            'client_party_id' => DB::table('invoices')
-                ->where('id', $fixture['invoiceId'])
-                ->value('client_party_id'),
+        $creditNoteId = (string) Str::ulid();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
             'invoice_id' => $fixture['invoiceId'],
             'reference' => 'CN-'.Str::upper(Str::random(10)),
             'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
-            'status' => 'issued',
+            'status' => 'draft',
             'issue_date' => now()->toDateString(),
-            'issued_at' => now(),
+            'issued_at' => null,
             'reason' => 'Financial integrity test',
             'subtotal' => '500000.0000',
             'tax' => '0.0000',
@@ -336,7 +500,25 @@ test('issued credit notes cannot consume an already allocated invoice balance', 
             'currency' => 'XOF',
             'created_at' => now(),
             'updated_at' => now(),
-        ]))->toThrow(QueryException::class);
+        ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Matching detail line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '500000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '500000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'issued'])
+        )->toThrow(QueryException::class);
     });
 });
 
@@ -346,17 +528,20 @@ test('payment allocation is capped by invoice total after issued credit notes', 
     $tenant->run(function (): void {
         $fixture = terra5hFinancialFixture();
 
+        $creditNoteId = (string) Str::ulid();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
         DB::table('credit_notes')->insert([
-            'id' => (string) Str::ulid(),
-            'client_party_id' => DB::table('invoices')
-                ->where('id', $fixture['invoiceId'])
-                ->value('client_party_id'),
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
             'invoice_id' => $fixture['invoiceId'],
             'reference' => 'CN-'.Str::upper(Str::random(10)),
             'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
-            'status' => 'issued',
+            'status' => 'draft',
             'issue_date' => now()->toDateString(),
-            'issued_at' => now(),
+            'issued_at' => null,
             'reason' => 'Financial integrity test',
             'subtotal' => '300000.0000',
             'tax' => '0.0000',
@@ -365,6 +550,23 @@ test('payment allocation is capped by invoice total after issued credit notes', 
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Matching detail line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '300000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '300000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'issued']);
 
         DB::table('payments')
             ->where('id', $fixture['paymentId'])
@@ -416,7 +618,7 @@ test('payment allocation state validation locks the payment row', function () {
 
 
 test('invoice total cannot be reduced below allocations and issued credit notes', function () {
-    $tenant = $this->testTenant('terra_invoice_total_financial_guard');
+    $tenant = $this->testTenant('terra_invoice_total_credit_note_line_guard');
 
     $tenant->run(function (): void {
         $fixture = terra5hFinancialFixture();
@@ -437,16 +639,17 @@ test('invoice total cannot be reduced below allocations and issued credit notes'
         $clientPartyId = DB::table('invoices')
             ->where('id', $fixture['invoiceId'])
             ->value('client_party_id');
+        $creditNoteId = (string) Str::ulid();
 
         DB::table('credit_notes')->insert([
-            'id' => (string) Str::ulid(),
+            'id' => $creditNoteId,
             'client_party_id' => $clientPartyId,
             'invoice_id' => $fixture['invoiceId'],
             'reference' => 'CN-'.Str::upper(Str::random(10)),
-            'credit_note_number' => 'CN-N-'.Str::upper(Str::random(10)),
-            'status' => 'issued',
+            'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
             'issue_date' => now()->toDateString(),
-            'issued_at' => now(),
+            'issued_at' => null,
             'reason' => 'Invoice total integrity test',
             'subtotal' => '200000.0000',
             'tax' => '0.0000',
@@ -456,8 +659,25 @@ test('invoice total cannot be reduced below allocations and issued credit notes'
             'updated_at' => now(),
         ]);
 
+        DB::table('credit_note_items')->insert([
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Matching detail line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '200000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '200000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['status' => 'issued']);
+
         // 600,000 allocated + 200,000 of issued credit notes.
-        // Reducing the invoice to 700,000 would break the invariant.
+        // Reducing the invoice to 700,000 breaks the invariant.
         expect(fn () => DB::table('invoices')
             ->where('id', $fixture['invoiceId'])
             ->update(['total' => '700000.0000'])
