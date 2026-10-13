@@ -216,6 +216,89 @@ test('payment amount cannot be reduced below existing allocations', function () 
     });
 });
 
+test('issued credit notes must belong to the invoice client', function () {
+    $tenant = $this->testTenant('terra_credit_note_client_mismatch_on_issue');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        $otherPartyId = (string) Str::ulid();
+
+        DB::table('parties')->insert([
+            'id' => $otherPartyId,
+            'type' => 'person',
+            'display_name' => 'Different Credit Note Client',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('credit_notes')->insert([
+            'id' => (string) Str::ulid(),
+            'client_party_id' => $otherPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
+            'status' => 'issued',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => now(),
+            'reason' => 'Client mismatch regression test',
+            'subtotal' => '100000.0000',
+            'tax' => '0.0000',
+            'total' => '100000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]))->toThrow(QueryException::class);
+    });
+});
+
+test('draft credit note client cannot be reassigned to another party', function () {
+    $tenant = $this->testTenant('terra_credit_note_client_reassignment');
+
+    $tenant->run(function (): void {
+        $fixture = terra5hFinancialFixture();
+
+        $invoiceClientId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        $otherPartyId = (string) Str::ulid();
+
+        DB::table('parties')->insert([
+            'id' => $otherPartyId,
+            'type' => 'person',
+            'display_name' => 'Different Draft Credit Note Client',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $creditNoteId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $invoiceClientId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Client reassignment regression test',
+            'subtotal' => '100000.0000',
+            'tax' => '0.0000',
+            'total' => '100000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        expect(fn () => DB::table('credit_notes')
+            ->where('id', $creditNoteId)
+            ->update(['client_party_id' => $otherPartyId])
+        )->toThrow(QueryException::class);
+    });
+});
+
 test('issued credit notes cannot consume an already allocated invoice balance', function () {
     $tenant = $this->testTenant('terra_5h_credit_note_allocation_guard');
 

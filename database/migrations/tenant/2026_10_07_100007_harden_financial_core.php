@@ -1024,6 +1024,7 @@ return new class extends Migration
             DECLARE
                 invoice_total NUMERIC(20,4);
                 invoice_currency CHAR(3);
+                invoice_client_party_id TEXT;
                 issued_credit_amount NUMERIC(20,4);
                 allocated_payment_amount NUMERIC(20,4);
             BEGIN
@@ -1050,8 +1051,8 @@ return new class extends Migration
                     NEW.immutable_at := COALESCE(NEW.immutable_at, now());
                 END IF;
 
-                SELECT total, currency
-                INTO invoice_total, invoice_currency
+                SELECT total, currency, client_party_id
+                INTO invoice_total, invoice_currency, invoice_client_party_id
                 FROM invoices
                 WHERE id = NEW.invoice_id
                 FOR UPDATE;
@@ -1061,6 +1062,13 @@ return new class extends Migration
                         'Invoice % does not exist.',
                         NEW.invoice_id
                         USING ERRCODE = '23503';
+                END IF;
+
+                IF NEW.client_party_id IS DISTINCT FROM invoice_client_party_id THEN
+                    RAISE EXCEPTION
+                        'Credit note client must match invoice % client.',
+                        NEW.invoice_id
+                        USING ERRCODE = '23514';
                 END IF;
 
                 IF NEW.currency <> invoice_currency THEN
@@ -1104,7 +1112,7 @@ return new class extends Migration
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER terra_validate_credit_note_financial_trigger
-            BEFORE INSERT OR UPDATE OF invoice_id, currency, total, status
+            BEFORE INSERT OR UPDATE OF invoice_id, client_party_id, currency, total, status
             ON credit_notes
             FOR EACH ROW
             EXECUTE FUNCTION terra_validate_credit_note_financial()
