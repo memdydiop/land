@@ -399,6 +399,172 @@ test('invoices cannot exceed a schedule item amount', function () use ($buildSal
     });
 });
 
+test('concurrent invoices serialize on payment schedule item and cannot exceed its amount', function () use ($buildSale, $insertScheduleItem) {
+    $tenant = $this->testTenant('terra_payment_schedule_invoice_concurrency');
+
+    $tenant->run(function () use ($tenant, $buildSale, $insertScheduleItem): void {
+        $sale = $buildSale();
+
+        $scheduleItemId = $insertScheduleItem(
+            $sale['saleId'],
+            1,
+            'Advance',
+            'date',
+            null,
+            '2026-11-01',
+            '5000000.0000',
+        );
+
+        $contractId = (string) Str::ulid();
+
+        DB::table('contracts')->insert([
+            'id' => $contractId,
+            'party_id' => $sale['partyId'],
+            'sale_id' => $sale['saleId'],
+            'project_id' => null,
+            'reference' => 'CONTRACT-'.Str::upper(Str::random(8)),
+            'title' => 'Concurrent invoice cap contract',
+            'type' => 'sale',
+            'status' => 'active',
+            'amount' => '30000000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $makeInvoice = static function () use ($sale, $contractId, $scheduleItemId): array {
+            return [
+                'id' => (string) Str::ulid(),
+                'client_party_id' => $sale['partyId'],
+                'project_id' => null,
+                'contract_id' => $contractId,
+                'schedule_item_id' => $scheduleItemId,
+                'reference' => 'INV-'.Str::upper(Str::random(10)),
+                'invoice_number' => 'INV-'.Str::upper(Str::random(10)),
+                'status' => 'issued',
+                'issue_date' => now()->toDateString(),
+                'due_date' => null,
+                'subtotal' => '3000000.0000',
+                'tax' => '0.0000',
+                'total' => '3000000.0000',
+                'currency' => 'XOF',
+                'work_situation_id' => null,
+                'invoice_type' => 'advance',
+                'numbering_year' => now()->year,
+                'issued_at' => now(),
+                'retention_amount' => '0.0000',
+                'net_amount' => '3000000.0000',
+                'immutable_at' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+        };
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+
+        $tenantSchema = $tenant->schema_name;
+        $originalSearchPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS path"
+        )->path;
+        $originalLockTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS timeout"
+        )->timeout;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$tenantSchema.',public'],
+            );
+
+            expect($first->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema)->toBe($tenantSchema)
+                ->and($second->selectOne(
+                    'SELECT current_schema() AS schema'
+                )->schema)->toBe($tenantSchema);
+
+            // Session A reserves the schedule item while Session B attempts an invoice.
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT id FROM payment_schedule_items WHERE id = ? FOR UPDATE',
+                [$scheduleItemId],
+            );
+
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockException = null;
+
+            try {
+                $second->table('invoices')->insert($makeInvoice());
+            } catch (QueryException $exception) {
+                $lockException = $exception;
+            }
+
+            expect($lockException)->toBeInstanceOf(QueryException::class)
+                ->and($lockException->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // Session A commits the first 3,000,000 XOF invoice.
+            $first->table('invoices')->insert($makeInvoice());
+            $first->commit();
+
+            // Session B retries: 6,000,000 XOF would exceed the 5,000,000 cap.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $limitException = null;
+
+            try {
+                $second->table('invoices')->insert($makeInvoice());
+            } catch (QueryException $exception) {
+                $limitException = $exception;
+            }
+
+            expect($limitException)->toBeInstanceOf(QueryException::class)
+                ->and($limitException->errorInfo[0] ?? null)->toBe('23514');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('invoices')
+                    ->where('schedule_item_id', $scheduleItemId)
+                    ->count()
+            )->toBe(1)
+                ->and(
+                    $first->table('invoices')
+                        ->where('schedule_item_id', $scheduleItemId)
+                        ->sum('total')
+                )->toBe('3000000.0000');
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$originalSearchPath],
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS timeout",
+                [$originalLockTimeout],
+            );
+        }
+    });
+});
+
 test('schedule item is frozen after invoice creation', function () use ($buildSale, $insertScheduleItem) {
     $tenant = $this->testTenant('terra_payment_schedule_freeze_v1');
 
