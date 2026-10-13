@@ -598,6 +598,164 @@ test('payment allocation is capped by invoice total after issued credit notes', 
     });
 });
 
+test('payment allocation retries after credit note issuance and rejects the reduced collectible balance', function () {
+    $tenant = $this->testTenant('terra_5h_credit_note_concurrency');
+
+    $tenant->run(function () use ($tenant): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $creditNoteId = (string) Str::ulid();
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Financial concurrency test',
+            'subtotal' => '500000.0000',
+            'tax' => '0.0000',
+            'total' => '500000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Matching detail line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '500000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '500000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+
+        $tenantSchema = $tenant->schema_name;
+        $originalSearchPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS path"
+        )->path;
+        $originalLockTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS timeout"
+        )->timeout;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$tenantSchema.',public'],
+            );
+
+            $firstSchema = $first->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema;
+
+            $secondSchema = $second->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema;
+
+            expect($firstSchema)->toBe($tenantSchema)
+                ->and($secondSchema)->toBe($tenantSchema);
+
+            // Session B must fail quickly rather than hang while session A holds the invoice.
+            $second->statement("SET lock_timeout TO '250ms'");
+
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT id FROM invoices WHERE id = ? FOR UPDATE',
+                [$fixture['invoiceId']],
+            );
+
+            $second->beginTransaction();
+
+            $lockException = null;
+
+            try {
+                $second->table('payment_allocations')->insert([
+                    'id' => (string) Str::ulid(),
+                    'payment_id' => $fixture['paymentId'],
+                    'invoice_id' => $fixture['invoiceId'],
+                    'amount' => '600000.0000',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (QueryException $exception) {
+                $lockException = $exception;
+            }
+
+            expect($lockException)->toBeInstanceOf(QueryException::class);
+            expect($lockException->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // Session A owns the invoice lock and emits a valid 500,000 XOF credit note.
+            $first->table('credit_notes')
+                ->where('id', $creditNoteId)
+                ->update(['status' => 'issued']);
+
+            $first->commit();
+
+            // Retry after the credit note is committed: 600,000 exceeds the 500,000 balance.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $balanceException = null;
+
+            try {
+                $second->table('payment_allocations')->insert([
+                    'id' => (string) Str::ulid(),
+                    'payment_id' => $fixture['paymentId'],
+                    'invoice_id' => $fixture['invoiceId'],
+                    'amount' => '600000.0000',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (QueryException $exception) {
+                $balanceException = $exception;
+            }
+
+            expect($balanceException)->toBeInstanceOf(QueryException::class);
+            expect($balanceException->errorInfo[0] ?? null)->toBe('23514');
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$originalSearchPath],
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS timeout",
+                [$originalLockTimeout],
+            );
+        }
+    });
+});
+
 test('payment allocation state validation locks the payment row', function () {
     $tenant = $this->testTenant('terra_5h_payment_state_lock');
 
