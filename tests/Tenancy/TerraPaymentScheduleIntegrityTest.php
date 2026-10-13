@@ -190,6 +190,144 @@ test('schedule amounts cannot exceed sale agreed price', function () use ($build
     });
 });
 
+test('concurrent schedule items serialize on sale and cannot exceed agreed price', function () use ($buildSale) {
+    $tenant = $this->testTenant('terra_payment_schedule_sale_concurrency');
+
+    $tenant->run(function () use ($tenant, $buildSale): void {
+        $sale = $buildSale();
+
+        $makeScheduleItem = static function (
+            int $position,
+            string $label
+        ) use ($sale): array {
+            return [
+                'id' => (string) Str::ulid(),
+                'sale_id' => $sale['saleId'],
+                'position' => $position,
+                'label' => $label,
+                'trigger_type' => 'date',
+                'trigger_reference' => null,
+                'due_on' => $position === 1 ? '2026-11-01' : '2026-12-01',
+                'amount' => '20000000.0000',
+                'percentage' => null,
+                'currency' => 'XOF',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+        };
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+
+        $tenantSchema = $tenant->schema_name;
+        $originalSearchPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS path"
+        )->path;
+        $originalLockTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS timeout"
+        )->timeout;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$tenantSchema.',public'],
+            );
+
+            expect($first->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema)->toBe($tenantSchema)
+                ->and($second->selectOne(
+                    'SELECT current_schema() AS schema'
+                )->schema)->toBe($tenantSchema);
+
+            // Session A locks the sale before Session B attempts its schedule item.
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT id FROM sales WHERE id = ? FOR UPDATE',
+                [$sale['saleId']],
+            );
+
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockException = null;
+
+            try {
+                $second->table('payment_schedule_items')->insert(
+                    $makeScheduleItem(2, 'Second call')
+                );
+            } catch (QueryException $exception) {
+                $lockException = $exception;
+            }
+
+            expect($lockException)->toBeInstanceOf(QueryException::class)
+                ->and($lockException->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // Session A commits the first 20,000,000 XOF schedule item.
+            $first->table('payment_schedule_items')->insert(
+                $makeScheduleItem(1, 'First call')
+            );
+
+            $first->commit();
+
+            // Session B retries; 40,000,000 XOF exceeds the sale price of 30,000,000.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $limitException = null;
+
+            try {
+                $second->table('payment_schedule_items')->insert(
+                    $makeScheduleItem(2, 'Second call')
+                );
+            } catch (QueryException $exception) {
+                $limitException = $exception;
+            }
+
+            expect($limitException)->toBeInstanceOf(QueryException::class)
+                ->and($limitException->errorInfo[0] ?? null)->toBe('23514');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('payment_schedule_items')
+                    ->where('sale_id', $sale['saleId'])
+                    ->count()
+            )->toBe(1)
+                ->and(
+                    $first->table('payment_schedule_items')
+                        ->where('sale_id', $sale['saleId'])
+                        ->sum('amount')
+                )->toBe('20000000.0000');
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$originalSearchPath],
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS timeout",
+                [$originalLockTimeout],
+            );
+        }
+    });
+});
+
 test('schedule percentages cannot exceed one hundred percent', function () use ($buildSale, $insertScheduleItem) {
     $tenant = $this->testTenant('terra_payment_schedule_percentage_v1');
 
