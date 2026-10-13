@@ -849,6 +849,163 @@ test('invoice total cannot be reduced below allocations and issued credit notes'
     });
 });
 
+test('concurrent refund requests serialize on the original payment and cannot exceed its amount', function () {
+    $tenant = $this->testTenant('terra_refund_concurrency_cap');
+
+    $tenant->run(function () use ($tenant): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+
+        $tenantSchema = $tenant->schema_name;
+        $originalSearchPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS path"
+        )->path;
+        $originalLockTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS timeout"
+        )->timeout;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$tenantSchema.',public'],
+            );
+
+            expect($first->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema)->toBe($tenantSchema);
+
+            expect($second->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema)->toBe($tenantSchema);
+
+            // Session A holds the original payment lock.
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT id FROM payments WHERE id = ? FOR UPDATE',
+                [$fixture['paymentId']],
+            );
+
+            // Session B tries to create a competing refund and must wait.
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockException = null;
+
+            try {
+                $second->table('payments')->insert([
+                    'id' => (string) Str::ulid(),
+                    'reservation_id' => $reservationId,
+                    'amount' => '600000.0000',
+                    'currency' => 'XOF',
+                    'direction' => 'outgoing',
+                    'type' => 'refund',
+                    'method' => 'bank_transfer',
+                    'refund_of' => $fixture['paymentId'],
+                    'status' => 'pending',
+                    'paid_at' => null,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (QueryException $exception) {
+                $lockException = $exception;
+            }
+
+            expect($lockException)->toBeInstanceOf(QueryException::class)
+                ->and($lockException->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // Session A records and commits the first 600,000 XOF refund.
+            $first->table('payments')->insert([
+                'id' => (string) Str::ulid(),
+                'reservation_id' => $reservationId,
+                'amount' => '600000.0000',
+                'currency' => 'XOF',
+                'direction' => 'outgoing',
+                'type' => 'refund',
+                'method' => 'bank_transfer',
+                'refund_of' => $fixture['paymentId'],
+                'status' => 'pending',
+                'paid_at' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $first->commit();
+
+            // Session B retries after the commit; 1,200,000 exceeds the original payment.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $limitException = null;
+
+            try {
+                $second->table('payments')->insert([
+                    'id' => (string) Str::ulid(),
+                    'reservation_id' => $reservationId,
+                    'amount' => '600000.0000',
+                    'currency' => 'XOF',
+                    'direction' => 'outgoing',
+                    'type' => 'refund',
+                    'method' => 'bank_transfer',
+                    'refund_of' => $fixture['paymentId'],
+                    'status' => 'pending',
+                    'paid_at' => null,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (QueryException $exception) {
+                $limitException = $exception;
+            }
+
+            expect($limitException)->toBeInstanceOf(QueryException::class)
+                ->and($limitException->errorInfo[0] ?? null)->toBe('23514');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('payments')
+                    ->where('refund_of', $fixture['paymentId'])
+                    ->whereIn('status', ['pending', 'confirmed'])
+                    ->sum('amount')
+            )->toBe('600000.0000');
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$originalSearchPath],
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS timeout",
+                [$originalLockTimeout],
+            );
+        }
+    });
+});
+
 test('original payment cannot be reduced or invalidated while active refunds exist', function () {
     $tenant = $this->testTenant('terra_original_payment_refund_guard');
 
