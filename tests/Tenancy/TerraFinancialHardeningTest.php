@@ -1039,6 +1039,142 @@ test('concurrent refund requests serialize on the original payment and cannot ex
     });
 });
 
+
+test('concurrent original payment reduction is serialized with refund creation', function () {
+    $tenant = $this->testTenant('terra_original_payment_refund_creation_race');
+
+    $tenant->run(function () use ($tenant): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $reservationId = DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->value('reservation_id');
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+        $schema = $tenant->schema_name;
+
+        $oldPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS value"
+        )->value;
+
+        $oldTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS value"
+        )->value;
+
+        $refund = [
+            'id' => (string) Str::ulid(),
+            'reservation_id' => $reservationId,
+            'amount' => '400000.0000',
+            'currency' => 'XOF',
+            'direction' => 'outgoing',
+            'type' => 'refund',
+            'method' => 'bank_transfer',
+            'refund_of' => $fixture['paymentId'],
+            'status' => 'pending',
+            'paid_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ];
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$schema.',public']
+            );
+
+            expect($first->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema)->toBe($schema)
+                ->and($second->selectOne(
+                    'SELECT current_schema() AS schema'
+                )->schema)->toBe($schema);
+
+            // Transaction A reduces the original payment and retains its row lock.
+            $first->beginTransaction();
+
+            $first->table('payments')
+                ->where('id', $fixture['paymentId'])
+                ->update(['amount' => '300000.0000']);
+
+            // Transaction B attempts a refund that was valid before the reduction.
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockError = null;
+
+            try {
+                $second->table('payments')->insert($refund);
+            } catch (QueryException $exception) {
+                $lockError = $exception;
+            }
+
+            expect($lockError)->toBeInstanceOf(QueryException::class)
+                ->and($lockError->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // After A commits, the same refund must fail against the new amount.
+            $first->commit();
+
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $balanceError = null;
+
+            try {
+                $second->table('payments')->insert($refund);
+            } catch (QueryException $exception) {
+                $balanceError = $exception;
+            }
+
+            expect($balanceError)->toBeInstanceOf(QueryException::class)
+                ->and($balanceError->errorInfo[0] ?? null)->toBe('23514');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('payments')
+                    ->where('id', $fixture['paymentId'])
+                    ->value('amount')
+            )->toBe('300000.0000')
+                ->and(
+                    $first->table('payments')
+                        ->where('refund_of', $fixture['paymentId'])
+                        ->whereIn('status', ['pending', 'confirmed'])
+                        ->count()
+                )->toBe(0);
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$oldPath]
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS value",
+                [$oldTimeout]
+            );
+        }
+    });
+});
+
+
 test('original payment cannot be reduced or invalidated while active refunds exist', function () {
     $tenant = $this->testTenant('terra_original_payment_refund_guard');
 
