@@ -7,6 +7,59 @@ use Tests\TenancyTestCase;
 
 uses(TenancyTestCase::class);
 
+
+test('tenant run restores central context when callback throws', function () {
+    $tenant = $this->testTenant('context_exception');
+
+    expect(fn () => $tenant->run(function (): void {
+        throw new RuntimeException('Simulated tenant operation failure.');
+    }))->toThrow(RuntimeException::class);
+
+    expect(tenancy()->initialized)->toBeFalse()
+        ->and(tenant())->toBeNull()
+        ->and(
+            DB::selectOne('SELECT current_schema() AS schema')->schema
+        )->toBe('testing');
+});
+
+
+
+test('nested tenant run restores previous tenant when callback throws', function () {
+    $tenantA = $this->testTenant('context_outer_exception');
+    $tenantB = $this->testTenant('context_inner_exception');
+
+    $tenantA->run(function () use ($tenantA, $tenantB): void {
+        expect(tenant()->getTenantKey())->toBe($tenantA->getTenantKey())
+            ->and(
+                DB::selectOne('SELECT current_schema() AS schema')->schema
+            )->toBe($tenantA->schema_name);
+
+        try {
+            $tenantB->run(function (): void {
+                throw new RuntimeException('Simulated nested tenant failure.');
+            });
+
+            throw new RuntimeException('Expected the nested callback to throw.');
+        } catch (RuntimeException $exception) {
+            expect($exception->getMessage())
+                ->toBe('Simulated nested tenant failure.');
+        }
+
+        expect(tenancy()->initialized)->toBeTrue()
+            ->and(tenant()->getTenantKey())->toBe($tenantA->getTenantKey())
+            ->and(
+                DB::selectOne('SELECT current_schema() AS schema')->schema
+            )->toBe($tenantA->schema_name);
+    });
+
+    expect(tenancy()->initialized)->toBeFalse()
+        ->and(tenant())->toBeNull()
+        ->and(
+            DB::selectOne('SELECT current_schema() AS schema')->schema
+        )->toBe('testing');
+});
+
+
 test('tenant context switches search path and restores central context', function () {
     $tenant = $this->testTenant('context');
 

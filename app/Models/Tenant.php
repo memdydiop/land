@@ -52,6 +52,27 @@ class Tenant extends BaseTenant implements TenantWithDatabase
         ];
     }
 
+    /**
+     * Execute a callback in this tenant context and always restore the
+     * previously active tenant, including when the callback throws.
+     */
+    public function run(callable $callback)
+    {
+        $originalTenant = tenant();
+
+        try {
+            tenancy()->initialize($this);
+
+            return $callback($this);
+        } finally {
+            if ($originalTenant) {
+                tenancy()->initialize($originalTenant);
+            } else {
+                tenancy()->end();
+            }
+        }
+    }
+
     public function getSchemaName(): string
     {
         return (string) $this->getAttribute('schema_name');
