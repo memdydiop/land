@@ -312,6 +312,183 @@ test('a reservation can produce only one sale', function () {
     });
 });
 
+test('concurrent sale creation serializes on reservation and cannot create duplicates', function () {
+    $tenant = $this->testTenant('terra_sale_concurrency_guard');
+
+    $tenant->run(function () use ($tenant): void {
+        $partyId = (string) Str::ulid();
+        $parcelId = (string) Str::ulid();
+        $offerId = (string) Str::ulid();
+        $reservationId = (string) Str::ulid();
+
+        DB::table('parties')->insert([
+            'id' => $partyId,
+            'type' => 'person',
+            'display_name' => 'Concurrent Sale Buyer',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('parcels')->insert([
+            'id' => $parcelId,
+            'ilot_id' => null,
+            'reference' => 'PARCEL-'.Str::upper(Str::random(10)),
+            'parcel_number' => 'CONCURRENT-'.$parcelId,
+            'status' => 'provisional',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('commercial_offers')->insert([
+            'id' => $offerId,
+            'reference' => 'OFFER-'.Str::upper(Str::random(10)),
+            'title' => 'Concurrent sale offer',
+            'price' => '10000000.0000',
+            'currency' => 'XOF',
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('commercial_offer_items')->insert([
+            'id' => (string) Str::ulid(),
+            'commercial_offer_id' => $offerId,
+            'parcel_id' => $parcelId,
+            'position' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('reservations')->insert([
+            'id' => $reservationId,
+            'commercial_offer_id' => $offerId,
+            'party_id' => $partyId,
+            'reference' => 'RES-'.Str::upper(Str::random(10)),
+            'status' => 'confirmed',
+            'reserved_at' => now(),
+            'agreed_price' => '10000000.0000',
+            'deposit_amount' => '500000.0000',
+            'currency' => 'XOF',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $makeSale = static function () use ($reservationId, $partyId): array {
+            return [
+                'id' => (string) Str::ulid(),
+                'reservation_id' => $reservationId,
+                'buyer_party_id' => $partyId,
+                'reference' => 'SALE-'.Str::upper(Str::random(10)),
+                'type' => 'land',
+                'status' => 'confirmed',
+                'agreed_price' => '10000000.0000',
+                'currency' => 'XOF',
+                'sold_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+        };
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+
+        $tenantSchema = $tenant->schema_name;
+        $originalSearchPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS path"
+        )->path;
+        $originalLockTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS timeout"
+        )->timeout;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$tenantSchema.',public'],
+            );
+
+            expect($first->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema)->toBe($tenantSchema)
+                ->and($second->selectOne(
+                    'SELECT current_schema() AS schema'
+                )->schema)->toBe($tenantSchema);
+
+            // Session A locks the reservation before Session B attempts conversion.
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT id FROM reservations WHERE id = ? FOR UPDATE',
+                [$reservationId],
+            );
+
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockException = null;
+
+            try {
+                $second->table('sales')->insert($makeSale());
+            } catch (QueryException $exception) {
+                $lockException = $exception;
+            }
+
+            expect($lockException)->toBeInstanceOf(QueryException::class)
+                ->and($lockException->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // Session A converts the reservation and commits the first sale.
+            $first->table('sales')->insert($makeSale());
+            $first->commit();
+
+            // Session B retries. The same reservation must not yield a second sale.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $duplicateException = null;
+
+            try {
+                $second->table('sales')->insert($makeSale());
+            } catch (QueryException $exception) {
+                $duplicateException = $exception;
+            }
+
+            expect($duplicateException)->toBeInstanceOf(QueryException::class)
+                ->and($duplicateException->errorInfo[0] ?? null)->toBe('23505');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('sales')
+                    ->where('reservation_id', $reservationId)
+                    ->count()
+            )->toBe(1);
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$originalSearchPath],
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS timeout",
+                [$originalLockTimeout],
+            );
+        }
+    });
+});
+
 test('one sale can have multiple contracts and each contract can have multiple invoices', function () {
     $tenant = $this->testTenant('terra_sale_contracts_invoices');
 
