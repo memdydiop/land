@@ -1093,6 +1093,162 @@ test('original payment cannot be reduced or invalidated while active refunds exi
 });
 
 
+
+test('concurrent cancellation prevents allocation from entering a cancelled invoice', function () {
+    $tenant = $this->testTenant('terra_invoice_cancel_allocation_race');
+
+    $tenant->run(function () use ($tenant): void {
+        $fixture = terra5hFinancialFixture();
+
+        DB::table('payments')
+            ->where('id', $fixture['paymentId'])
+            ->update(['status' => 'confirmed']);
+
+        $first = DB::connection();
+        $schema = $tenant->schema_name;
+        $applicationName = 'terra_race_'.Str::lower(Str::random(12));
+
+        $config = config('database.connections.pgsql');
+        $quote = static fn (string $value): string =>
+            "'".str_replace(["\\", "'"], ["\\\\", "\\'"], $value)."'";
+
+        $connectionInfo = sprintf(
+            "host=%s port=%s dbname=%s user=%s password=%s application_name=%s",
+            $quote((string) ($config['host'] ?? 'localhost')),
+            $quote((string) ($config['port'] ?? '5432')),
+            $quote((string) $config['database']),
+            $quote((string) $config['username']),
+            $quote((string) ($config['password'] ?? '')),
+            $quote($applicationName),
+        );
+
+        $async = pg_connect($connectionInfo, PGSQL_CONNECT_FORCE_NEW);
+
+        if ($async === false) {
+            throw new RuntimeException('Impossible d’ouvrir la connexion PostgreSQL asynchrone.');
+        }
+
+        try {
+            $pathResult = pg_query_params(
+                $async,
+                'SELECT set_config($1, $2, false)',
+                ['search_path', $schema.',public'],
+            );
+
+            if ($pathResult === false) {
+                throw new RuntimeException('Impossible de configurer le schéma tenant.');
+            }
+
+            pg_free_result($pathResult);
+
+            $timeoutResult = pg_query($async, "SET lock_timeout TO '10s'");
+
+            if ($timeoutResult === false) {
+                throw new RuntimeException('Impossible de configurer le délai de verrouillage.');
+            }
+
+            pg_free_result($timeoutResult);
+
+            // Transaction A verrouille puis annule la facture sans valider.
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT id FROM invoices WHERE id = ? FOR UPDATE',
+                [$fixture['invoiceId']]
+            );
+
+            $first->table('invoices')
+                ->where('id', $fixture['invoiceId'])
+                ->update([
+                    'status' => 'cancelled',
+                    'updated_at' => now(),
+                ]);
+
+            // Transaction B tente une allocation. Le premier trigger lit
+            // encore l'ancien statut, puis le suivant attend le verrou facture.
+            $allocationId = (string) Str::ulid();
+
+            $sent = pg_send_query_params(
+                $async,
+                <<<'SQL'
+                    INSERT INTO payment_allocations
+                        (id, payment_id, invoice_id, amount, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, NOW(), NOW())
+                SQL,
+                [
+                    $allocationId,
+                    $fixture['paymentId'],
+                    $fixture['invoiceId'],
+                    '100000.0000',
+                ],
+            );
+
+            if (!$sent) {
+                throw new RuntimeException('Impossible d’envoyer l’insertion asynchrone.');
+            }
+
+            // Attendre que la connexion B soit effectivement bloquée sur un verrou.
+            $blocked = false;
+
+            for ($attempt = 0; $attempt < 300; $attempt++) {
+                $activity = $first->selectOne(
+                    <<<'SQL'
+                        SELECT wait_event_type
+                        FROM pg_stat_activity
+                        WHERE application_name = ?
+                          AND datname = current_database()
+                    SQL,
+                    [$applicationName]
+                );
+
+                if ($activity?->wait_event_type === 'Lock') {
+                    $blocked = true;
+                    break;
+                }
+
+                usleep(10_000);
+            }
+
+            expect($blocked)->toBeTrue();
+
+            // La facture annulée devient visible quand la transaction A commit.
+            $first->commit();
+
+            $result = pg_get_result($async);
+
+            expect($result)->not->toBeFalse();
+
+            $sqlState = pg_result_error_field($result, PGSQL_DIAG_SQLSTATE);
+            pg_free_result($result);
+
+            // L'insertion doit être rejetée après réévaluation du statut.
+            expect($sqlState)->toBe('23514');
+
+            expect(
+                DB::table('invoices')
+                    ->where('id', $fixture['invoiceId'])
+                    ->value('status')
+            )->toBe('cancelled')
+                ->and(
+                    DB::table('payment_allocations')
+                        ->where('id', $allocationId)
+                        ->exists()
+                )->toBeFalse();
+        } finally {
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            while (($pending = pg_get_result($async)) !== false) {
+                pg_free_result($pending);
+            }
+
+            pg_close($async);
+        }
+    });
+});
+
+
 test('invoice paid status requires settlement and cannot regress', function () {
     $tenant = $this->testTenant('terra_invoice_paid_lifecycle');
 
@@ -1183,6 +1339,172 @@ test('immutable invoice content cannot be edited or deleted', function () {
             ->where('id', $fixture['invoiceId'])
             ->delete()
         )->toThrow(QueryException::class);
+    });
+});
+
+
+
+test('concurrent credit note line insertion waits for issuance and is rejected after commit', function () {
+    $tenant = $this->testTenant('terra_credit_note_item_issuance_concurrency');
+
+    $tenant->run(function () use ($tenant): void {
+        $fixture = terra5hFinancialFixture();
+
+        $clientPartyId = DB::table('invoices')
+            ->where('id', $fixture['invoiceId'])
+            ->value('client_party_id');
+
+        $creditNoteId = (string) Str::ulid();
+        $initialItemId = (string) Str::ulid();
+
+        DB::table('credit_notes')->insert([
+            'id' => $creditNoteId,
+            'client_party_id' => $clientPartyId,
+            'invoice_id' => $fixture['invoiceId'],
+            'reference' => 'CN-'.Str::upper(Str::random(10)),
+            'credit_note_number' => 'CN-ISSUE-RACE-'.Str::upper(Str::random(10)),
+            'status' => 'draft',
+            'issue_date' => now()->toDateString(),
+            'issued_at' => null,
+            'reason' => 'Credit note issuance concurrency test',
+            'subtotal' => '200000.0000',
+            'tax' => '0.0000',
+            'total' => '200000.0000',
+            'currency' => 'XOF',
+            'immutable_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('credit_note_items')->insert([
+            'id' => $initialItemId,
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Initial detail line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '200000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '200000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+        $schema = $tenant->schema_name;
+
+        $oldPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS value"
+        )->value;
+
+        $oldTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS value"
+        )->value;
+
+        $concurrentItem = [
+            'id' => (string) Str::ulid(),
+            'credit_note_id' => $creditNoteId,
+            'description' => 'Concurrent detail line',
+            'quantity' => '1.000000',
+            'unit' => 'unit',
+            'unit_price' => '100000.0000',
+            'tax_rate' => '0.000000',
+            'total' => '100000.0000',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ];
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$schema.',public']
+            );
+
+            // Transaction A holds the parent credit-note row lock.
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT id FROM credit_notes WHERE id = ? FOR UPDATE',
+                [$creditNoteId]
+            );
+
+            // Transaction B must wait when its detail trigger locks the parent.
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockError = null;
+
+            try {
+                $second->table('credit_note_items')->insert($concurrentItem);
+            } catch (QueryException $exception) {
+                $lockError = $exception;
+            }
+
+            expect($lockError)->toBeInstanceOf(QueryException::class)
+                ->and($lockError->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // A issues the credit note with its existing, matching detail line.
+            $first->table('credit_notes')
+                ->where('id', $creditNoteId)
+                ->update([
+                    'status' => 'issued',
+                    'updated_at' => now(),
+                ]);
+
+            $first->commit();
+
+            // A retry after issuance must fail the immutable-parent guard.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $immutableError = null;
+
+            try {
+                $second->table('credit_note_items')->insert($concurrentItem);
+            } catch (QueryException $exception) {
+                $immutableError = $exception;
+            }
+
+            expect($immutableError)->toBeInstanceOf(QueryException::class)
+                ->and($immutableError->errorInfo[0] ?? null)->toBe('55006');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('credit_notes')
+                    ->where('id', $creditNoteId)
+                    ->value('status')
+            )->toBe('issued')
+                ->and(
+                    $first->table('credit_note_items')
+                        ->where('credit_note_id', $creditNoteId)
+                        ->count()
+                )->toBe(1);
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$oldPath]
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS value",
+                [$oldTimeout]
+            );
+        }
     });
 });
 

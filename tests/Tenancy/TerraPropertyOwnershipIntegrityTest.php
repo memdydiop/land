@@ -168,6 +168,125 @@ test('the same party cannot have overlapping ownership periods', function () {
     });
 });
 
+
+test('concurrent ownership inserts serialize and enforce the property total', function () {
+    $tenant = $this->testTenant('terra_property_ownership_concurrent_total');
+
+    $tenant->run(function () use ($tenant): void {
+        [$propertyId, $partyAId, $partyBId] = createOwnershipTestProperty();
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+        $schema = $tenant->schema_name;
+
+        $oldPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS value"
+        )->value;
+
+        $oldTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS value"
+        )->value;
+
+        $period = [
+            'start_date' => '2027-01-01',
+            'end_date' => '2027-12-31',
+        ];
+
+        $secondOwnership = array_merge([
+            'id' => (string) Str::ulid(),
+            'property_id' => $propertyId,
+            'party_id' => $partyBId,
+            'ownership_percentage' => 60,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], $period);
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$schema.',public']
+            );
+
+            // Transaction A inserts 60% and retains the property advisory lock.
+            $first->beginTransaction();
+
+            $first->table('property_owners')->insert(array_merge([
+                'id' => (string) Str::ulid(),
+                'property_id' => $propertyId,
+                'party_id' => $partyAId,
+                'ownership_percentage' => 60,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], $period));
+
+            // Transaction B must contend for the same property lock.
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockError = null;
+
+            try {
+                $second->table('property_owners')->insert($secondOwnership);
+            } catch (QueryException $exception) {
+                $lockError = $exception;
+            }
+
+            expect($lockError)->toBeInstanceOf(QueryException::class)
+                ->and($lockError->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // After A commits, retrying B must fail the 100% temporal cap.
+            $first->commit();
+
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $integrityError = null;
+
+            try {
+                $second->table('property_owners')->insert($secondOwnership);
+            } catch (QueryException $exception) {
+                $integrityError = $exception;
+            }
+
+            expect($integrityError)->toBeInstanceOf(QueryException::class)
+                ->and($integrityError->errorInfo[0] ?? null)->toBe('23514');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('property_owners')
+                    ->where('property_id', $propertyId)
+                    ->count()
+            )->toBe(1);
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$oldPath]
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS value",
+                [$oldTimeout]
+            );
+        }
+    });
+});
+
+
 test('ownership update is also validated temporally', function () {
     $tenant = $this->testTenant('terra_property_ownership_update');
 
