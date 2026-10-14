@@ -156,6 +156,146 @@ test('only one committed reservation is allowed per commercial offer', function 
     });
 });
 
+test('concurrent reservations on different offers cannot claim the same parcel', function () use ($party, $offer, $parcel, $offerItem, $reservation) {
+    $tenant = $this->testTenant('terra_reservation_parcel_concurrency');
+
+    $tenant->run(function () use ($tenant, $party, $offer, $parcel, $offerItem, $reservation): void {
+        $buyerOne = $party('Concurrent parcel buyer one');
+        $buyerTwo = $party('Concurrent parcel buyer two');
+        $parcelId = $parcel('5H-PARCEL-RESERVATION-CONCURRENCY');
+
+        $offerOne = $offer('5H-OFFER-RESERVATION-CONCURRENCY-ONE');
+        $offerTwo = $offer('5H-OFFER-RESERVATION-CONCURRENCY-TWO');
+
+        $offerItem($offerOne, ['parcel_id' => $parcelId]);
+        $offerItem($offerTwo, ['parcel_id' => $parcelId]);
+
+        $reservationOne = $reservation($offerOne, $buyerOne);
+        $reservationTwo = $reservation($offerTwo, $buyerTwo);
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+
+        $tenantSchema = $tenant->schema_name;
+        $originalSearchPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS path"
+        )->path;
+        $originalLockTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS timeout"
+        )->timeout;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$tenantSchema.',public'],
+            );
+
+            expect($first->selectOne(
+                'SELECT current_schema() AS schema'
+            )->schema)->toBe($tenantSchema)
+                ->and($second->selectOne(
+                    'SELECT current_schema() AS schema'
+                )->schema)->toBe($tenantSchema);
+
+            // Session A holds the same advisory lock used by the reservation guard.
+            $first->beginTransaction();
+
+            $first->selectOne(
+                'SELECT pg_advisory_xact_lock(hashtextextended(?, 0)) AS locked',
+                ['parcel:'.$parcelId],
+            );
+
+            // Session B attempts to confirm a reservation for the same parcel.
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockException = null;
+
+            try {
+                $second->table('reservations')
+                    ->where('id', $reservationTwo)
+                    ->update([
+                        'status' => 'confirmed',
+                        'updated_at' => now(),
+                    ]);
+            } catch (QueryException $exception) {
+                $lockException = $exception;
+            }
+
+            expect($lockException)->toBeInstanceOf(QueryException::class)
+                ->and($lockException->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // Session A confirms the first reservation and commits.
+            $first->table('reservations')
+                ->where('id', $reservationOne)
+                ->update([
+                    'status' => 'confirmed',
+                    'updated_at' => now(),
+                ]);
+
+            $first->commit();
+
+            // Session B retries after commit and must see the conflicting reservation.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $conflictException = null;
+
+            try {
+                $second->table('reservations')
+                    ->where('id', $reservationTwo)
+                    ->update([
+                        'status' => 'confirmed',
+                        'updated_at' => now(),
+                    ]);
+            } catch (QueryException $exception) {
+                $conflictException = $exception;
+            }
+
+            expect($conflictException)->toBeInstanceOf(QueryException::class)
+                ->and($conflictException->errorInfo[0] ?? null)->toBe('23505');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('reservations')
+                    ->whereIn('id', [$reservationOne, $reservationTwo])
+                    ->where('status', 'confirmed')
+                    ->count()
+            )->toBe(1)
+                ->and(
+                    $first->table('reservations')
+                        ->where('id', $reservationTwo)
+                        ->value('status')
+                )->toBe('pending');
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS path",
+                [$originalSearchPath],
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS timeout",
+                [$originalLockTimeout],
+            );
+        }
+    });
+});
+
 test('property and its unit cannot be committed through different offers', function () use ($party, $offer, $reservation, $parcel, $offerItem) {
     $tenant = $this->testTenant('terra_5h_property_unit_conflict');
 
