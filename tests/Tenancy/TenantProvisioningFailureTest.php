@@ -64,3 +64,61 @@ test('tenant is marked failed and schema retained when migrations fail', functio
         }
     }
 });
+
+test('tenant is marked failed and schema retained when migration command returns a failure code', function () {
+    $suffix = Str::lower((string) Str::ulid());
+    $slug = 'migration-exit-code-'.$suffix;
+    $schema = 'tenant_'.Str::slug($slug, '_');
+
+    Artisan::shouldReceive('call')
+        ->once()
+        ->andReturn(1);
+
+    try {
+        $caught = null;
+
+        try {
+            app(CreateTenant::class)->execute([
+                'name' => 'Migration Exit Code Tenant',
+                'slug' => $slug,
+            ]);
+        } catch (RuntimeException $exception) {
+            $caught = $exception;
+        }
+
+        expect($caught)->toBeInstanceOf(RuntimeException::class);
+        expect($caught->getMessage())
+            ->toContain('migrations failed with exit code 1');
+
+        $tenant = Tenant::query()
+            ->where('slug', $slug)
+            ->firstOrFail();
+
+        expect($tenant->status)->toBe(TenantStatus::Failed->value);
+
+        $schemaExists = DB::connection('pgsql')->selectOne(
+            'SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.schemata
+                WHERE schema_name = ?
+            ) AS exists',
+            [$schema],
+        )->exists;
+
+        expect((bool) $schemaExists)->toBeTrue();
+    } finally {
+        $tenant = Tenant::query()
+            ->where('slug', $slug)
+            ->first();
+
+        if ($tenant !== null) {
+            $manager = $tenant->database()->manager();
+
+            if ($manager->databaseExists($schema)) {
+                $manager->deleteDatabase($tenant);
+            }
+
+            $tenant->delete();
+        }
+    }
+});

@@ -5,19 +5,19 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Http\Middleware\EnsureTenantIsActive;
+use App\Jobs\Tenancy\MigrateTenantDatabase;
 use App\Models\Tenant;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
-use Livewire\Livewire;
 use Livewire\Features\SupportFileUploads\FilePreviewController;
+use Livewire\Livewire;
 use Stancl\JobPipeline\JobPipeline;
 use Stancl\Tenancy\Contracts\TenantWithDatabase;
 use Stancl\Tenancy\DatabaseConfig;
 use Stancl\Tenancy\Events;
 use Stancl\Tenancy\Jobs\CreateDatabase;
-use Stancl\Tenancy\Jobs\MigrateDatabase;
 use Stancl\Tenancy\Listeners;
 use Stancl\Tenancy\Middleware\InitializeTenancyByDomain;
 use Stancl\Tenancy\Middleware\InitializeTenancyByDomainOrSubdomain;
@@ -73,7 +73,7 @@ class TenancyServiceProvider extends ServiceProvider
             Events\TenantCreated::class,
             JobPipeline::make([
                 CreateDatabase::class,
-                MigrateDatabase::class,
+                MigrateTenantDatabase::class,
             ])
                 ->send(function (Events\TenantCreated $event) {
                     return $event->tenant;
