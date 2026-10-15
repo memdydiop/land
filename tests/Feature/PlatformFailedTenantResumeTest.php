@@ -14,6 +14,7 @@ use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Str;
+use Livewire\Livewire;
 use RuntimeException;
 
 function platformAuditTestUser(bool $ghost = false): User
@@ -397,4 +398,56 @@ test('Ghost does not flag recent incomplete audit attempts for manual review', f
         ->assertOk()
         ->assertSee('Résultat non confirmé')
         ->assertDontSee('À vérifier manuellement');
+});
+
+test('Ghost can complete recovery through the Livewire page and record an audit entry', function () {
+    $ghost = platformAuditTestUser(ghost: true);
+    $tenant = platformAuditTestFailedTenant();
+
+    $result = new TenantOnboardingResult(
+        $tenant->forceFill(['status' => TenantStatus::Active->value]),
+        new User,
+        new Domain,
+    );
+
+    $resumer = Mockery::mock(FailedTenantResumer::class);
+    $resumer->shouldReceive('execute')
+        ->once()
+        ->withArgs(
+            fn (Tenant $actualTenant, array $ownerInput): bool => (string) $actualTenant->getKey() === (string) $tenant->getKey()
+                && $ownerInput === [
+                    'owner_email' => 'livewire-owner@example.test',
+                    'owner_name' => null,
+                    'owner_password' => null,
+                    'owner_password_confirmation' => null,
+                ],
+        )
+        ->andReturn($result);
+
+    app()->instance(FailedTenantResumer::class, $resumer);
+
+    /** @var TestCase $testCase */
+    $testCase = $this;
+    $testCase->actingAs($ghost);
+
+    Livewire::test('pages::platform.failed-tenants')
+        ->call('selectTenant', (string) $tenant->getKey())
+        ->set('ownerEmail', 'livewire-owner@example.test')
+        ->call('resume')
+        ->assertSet('selectedTenantId', null)
+        ->assertSet(
+            'successMessage',
+            sprintf('Le tenant « %s » a été réactivé.', $tenant->name),
+        )
+        ->assertSet('failureMessage', null);
+
+    $audit = PlatformAuditLog::query()
+        ->where('tenant_id', $tenant->getKey())
+        ->where('event', 'tenant.resume')
+        ->firstOrFail();
+
+    expect($audit->status)->toBe('succeeded');
+    expect($audit->actor_id)->toBe($ghost->getKey());
+    expect($audit->failure_code)->toBeNull();
+    expect($audit->completed_at)->not->toBeNull();
 });
