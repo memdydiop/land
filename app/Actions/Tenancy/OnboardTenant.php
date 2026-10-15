@@ -4,16 +4,19 @@ declare(strict_types=1);
 
 namespace App\Actions\Tenancy;
 
+use App\Contracts\Tenancy\TenantBootstrapper;
+use App\Enums\TenantStatus;
 use App\Models\Domain;
 use App\Models\User;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rules\Password;
+use Throwable;
 
 final class OnboardTenant
 {
     public function __construct(
         private CreateTenant $createTenant,
-        private BootstrapTenant $bootstrapTenant,
+        private TenantBootstrapper $bootstrapTenant,
     ) {}
 
     /** @param array<string,mixed> $input */
@@ -38,30 +41,48 @@ final class OnboardTenant
             'currency' => $validated['currency'] ?? 'XOF',
         ]);
 
-        $this->bootstrapTenant->execute($tenant);
+        try {
+            $this->bootstrapTenant->execute($tenant);
 
-        $owner = $tenant->run(function () use ($validated): User {
-            $user = User::create([
-                'name' => $validated['owner_name'],
-                'email' => $validated['owner_email'],
-                'password' => $validated['owner_password'],
-                'email_verified_at' => now(),
+            $owner = $tenant->run(function () use ($validated): User {
+                $user = User::create([
+                    'name' => $validated['owner_name'],
+                    'email' => $validated['owner_email'],
+                    'password' => $validated['owner_password'],
+                    'email_verified_at' => now(),
+                ]);
+
+                $user->assignRole('owner');
+
+                return $user->fresh();
+            });
+
+            $domain = Domain::create([
+                'tenant_id' => $tenant->getKey(),
+                'domain' => $tenant->slug.'.'.config('tenancy.land_domain', 'land.ci'),
+                'is_primary' => true,
+                'verified_at' => now(),
             ]);
 
-            $user->assignRole('owner');
+            $tenant->update([
+                'status' => TenantStatus::Active->value,
+            ]);
 
-            return $user->fresh();
-        });
+            return new TenantOnboardingResult(
+                $tenant->fresh(),
+                $owner,
+                $domain->fresh(),
+            );
+        } catch (Throwable $exception) {
+            try {
+                $tenant->forceFill([
+                    'status' => TenantStatus::Failed->value,
+                ])->saveQuietly();
+            } catch (Throwable $statusException) {
+                report($statusException);
+            }
 
-        $domain = Domain::create([
-            'tenant_id' => $tenant->getKey(),
-            'domain' => $tenant->slug.'.'.config('tenancy.land_domain', 'land.ci'),
-            'is_primary' => true,
-            'verified_at' => now(),
-        ]);
-
-        $tenant->update(['status' => 'active']);
-
-        return new TenantOnboardingResult($tenant->fresh(), $owner, $domain->fresh());
+            throw $exception;
+        }
     }
 }

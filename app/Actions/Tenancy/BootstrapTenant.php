@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace App\Actions\Tenancy;
 
+use App\Contracts\Tenancy\TenantBootstrapper;
 use App\Models\Role;
 use App\Models\Tenant;
 
-final class BootstrapTenant
+final class BootstrapTenant implements TenantBootstrapper
 {
     public function execute(Tenant $tenant): Role
     {

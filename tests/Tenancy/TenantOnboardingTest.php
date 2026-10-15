@@ -55,4 +55,56 @@ class TenantOnboardingTest extends TenancyTestCase
         $this->assertNotNull($tenantOwner);
         $this->assertSame($result->owner->id, $tenantOwner->id);
     }
+
+    public function test_onboarding_marks_tenant_failed_when_bootstrap_fails_after_provisioning(): void
+    {
+        $suffix = Str::lower(Str::random(12));
+        $slug = 'failed-'.$suffix;
+
+        $this->mock(\App\Contracts\Tenancy\TenantBootstrapper::class)
+            ->shouldReceive('execute')
+            ->once()
+            ->andThrow(new \RuntimeException('Simulated bootstrap failure.'));
+
+        try {
+            app(OnboardTenant::class)->execute([
+                'organization_name' => 'Failed Tenant',
+                'organization_slug' => $slug,
+                'owner_name' => 'Test Owner',
+                'owner_email' => 'owner-'.$suffix.'@example.test',
+                'owner_password' => 'Secret-password-123',
+                'owner_password_confirmation' => 'Secret-password-123',
+            ]);
+
+            $this->fail('Expected the bootstrap operation to fail.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(
+                'Simulated bootstrap failure.',
+                $exception->getMessage()
+            );
+        }
+
+        $tenant = \App\Models\Tenant::query()
+            ->where('slug', $slug)
+            ->firstOrFail();
+
+        $this->assertSame('failed', $tenant->status);
+
+        $this->assertDatabaseMissing('domains', [
+            'tenant_id' => $tenant->id,
+            'domain' => $slug.'.'.config('tenancy.land_domain', 'land.ci'),
+        ]);
+
+        $schemaExists = \Illuminate\Support\Facades\DB::connection('pgsql')->selectOne(
+            'SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.schemata
+                WHERE schema_name = ?
+            ) AS exists',
+            [$tenant->schema_name],
+        )->exists;
+
+        $this->assertTrue((bool) $schemaExists);
+    }
+
 }

@@ -1,6 +1,7 @@
 <?php
 
 use Laravel\Fortify\Features;
+use App\Http\Middleware\EnsureTenantIsActive;
 use Stancl\Tenancy\Middleware\InitializeTenancyByDomain;
 
 return [
@@ -106,6 +107,7 @@ return [
         'web',
         'universal',
         InitializeTenancyByDomain::class,
+        EnsureTenantIsActive::class,
     ],
 
     /*

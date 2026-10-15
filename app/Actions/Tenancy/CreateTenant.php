@@ -28,7 +28,7 @@ final class CreateTenant
             'slug' => ['required', 'string', 'alpha_dash', 'max:50', 'unique:tenants,slug'],
         ])->validate();
 
-        return Tenant::create([
+        $tenant = new Tenant([
             'name' => $validated['name'],
             'slug' => $slug,
             'status' => TenantStatus::Provisioning->value,
@@ -38,6 +38,24 @@ final class CreateTenant
             'locale' => $validated['locale'] ?? 'en',
             'currency' => strtoupper($validated['currency'] ?? 'XOF'),
             'data' => [],
-        ])->fresh();
+        ]);
+
+        try {
+            $tenant->save();
+        } catch (\Throwable $exception) {
+            if ($tenant->exists) {
+                try {
+                    $tenant->forceFill([
+                        'status' => TenantStatus::Failed->value,
+                    ])->saveQuietly();
+                } catch (\Throwable $statusException) {
+                    report($statusException);
+                }
+            }
+
+            throw $exception;
+        }
+
+        return $tenant->fresh();
     }
 }
