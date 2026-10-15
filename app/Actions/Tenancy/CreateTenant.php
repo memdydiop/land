@@ -8,6 +8,7 @@ use App\Enums\TenantStatus;
 use App\Models\Tenant;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 final class CreateTenant
 {
@@ -25,7 +26,14 @@ final class CreateTenant
         $slug = Str::slug($validated['slug'] ?? $validated['name']);
 
         Validator::make(['slug' => $slug], [
-            'slug' => ['required', 'string', 'alpha_dash', 'max:50', 'unique:tenants,slug'],
+            'slug' => [
+                'required',
+                'string',
+                'alpha_dash',
+                'max:50',
+                'unique:tenants,slug',
+                Rule::notIn(config('tenancy.reserved_tenant_slugs', [])),
+            ],
         ])->validate();
 
         $tenant = new Tenant([
