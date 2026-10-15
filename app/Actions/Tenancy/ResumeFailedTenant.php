@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Actions\Tenancy;
 
+use App\Contracts\Tenancy\FailedTenantResumer;
 use App\Contracts\Tenancy\TenantBootstrapper;
 use App\Enums\TenantStatus;
 use App\Jobs\Tenancy\MigrateTenantDatabase;
@@ -17,7 +18,7 @@ use LogicException;
 use RuntimeException;
 use Throwable;
 
-final class ResumeFailedTenant
+final class ResumeFailedTenant implements FailedTenantResumer
 {
     public function __construct(
         private TenantBootstrapper $bootstrapTenant,

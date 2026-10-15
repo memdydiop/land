@@ -56,6 +56,11 @@
                     <flux:sidebar.item icon="layout-grid" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
                         {{ __('Dashboard')  }}
                     </flux:sidebar.item>
+                    @if (auth()->user()?->hasRole('Ghost'))
+                        <flux:sidebar.item icon="shield-check" :href="route('platform.tenants.failed')" :current="request()->routeIs('platform.tenants.failed')" wire:navigate>
+                            Reprise des tenants
+                        </flux:sidebar.item>
+                    @endif
                 </flux:sidebar.group>
             </flux:sidebar.nav>
 

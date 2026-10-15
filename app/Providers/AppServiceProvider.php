@@ -3,8 +3,9 @@
 namespace App\Providers;
 
 use App\Actions\Tenancy\BootstrapTenant;
+use App\Actions\Tenancy\ResumeFailedTenant;
+use App\Contracts\Tenancy\FailedTenantResumer;
 use App\Contracts\Tenancy\TenantBootstrapper;
-
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +22,11 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(
             TenantBootstrapper::class,
             BootstrapTenant::class,
+        );
+
+        $this->app->bind(
+            FailedTenantResumer::class,
+            ResumeFailedTenant::class,
         );
     }
 
