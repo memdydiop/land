@@ -25,12 +25,13 @@ return [
     'domain_model' => Domain::class,
 
     /**
-     * The list of domains hosting your central app.
+     * Canonical domain hosting the central Terra application.
      *
-     * Only relevant if you're using the domain or subdomain identification middleware.
+     * V1 uses one hostname, without scheme or port.
+     * Keep the domain identification middleware aligned with this setting.
      */
     'central_domains' => [
-        'localhost',
+        env('CENTRAL_DOMAIN', 'localhost') ?: 'localhost',
     ],
 
     'land_domain' => env('LAND_DOMAIN', 'land.ci'),
