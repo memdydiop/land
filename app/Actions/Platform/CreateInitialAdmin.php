@@ -21,7 +21,13 @@ final class CreateInitialAdmin
             'password' => ['required', 'string', Password::default()],
         ])->validate();
 
-        if (User::role('Ghost')->exists()) {
+        $ghostAlreadyExists = User::query()
+            ->whereHas('roles', fn ($query) => $query
+                ->where('name', 'Ghost')
+                ->where('guard_name', 'web'))
+            ->exists();
+
+        if ($ghostAlreadyExists) {
             throw new RuntimeException('The LAND Ghost account has already been created.');
         }
 
@@ -31,8 +37,11 @@ final class CreateInitialAdmin
             'name' => $input['name'],
             'email' => $input['email'],
             'password' => $input['password'],
-            'email_verified_at' => now(),
         ]);
+
+        $user->forceFill([
+            'email_verified_at' => now(),
+        ])->save();
 
         $user->assignRole($role);
 
