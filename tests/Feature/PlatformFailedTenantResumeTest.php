@@ -203,3 +203,198 @@ test('platform recovery records success and failure without sensitive values', f
     expect($failureLog->completed_at)->not->toBeNull();
     expect(json_encode($failureLog->getAttributes()))->not->toContain($rawExceptionMessage);
 });
+
+test('platform recovery does not run when the initial audit record cannot be written', function () {
+    $ghost = platformAuditTestUser(ghost: true);
+    $tenant = platformAuditTestFailedTenant();
+
+    $resumer = Mockery::mock(FailedTenantResumer::class);
+    $resumer->shouldNotReceive('execute');
+    app()->instance(FailedTenantResumer::class, $resumer);
+
+    $failAuditCreation = true;
+
+    PlatformAuditLog::creating(function (PlatformAuditLog $audit) use (&$failAuditCreation): void {
+        if (! $failAuditCreation) {
+            return;
+        }
+
+        $failAuditCreation = false;
+
+        throw new RuntimeException('Simulated audit storage failure.');
+    });
+
+    expect(
+        fn () => app(ResumeFailedTenantFromPlatform::class)->execute(
+            $ghost,
+            (string) $tenant->getKey(),
+            ['owner_email' => 'owner@example.test'],
+        ),
+    )->toThrow(RuntimeException::class, 'Simulated audit storage failure.');
+
+    expect(PlatformAuditLog::query()->count())->toBe(0);
+});
+
+test('successful recovery remains successful when audit completion update fails', function () {
+    $ghost = platformAuditTestUser(ghost: true);
+    $tenant = platformAuditTestFailedTenant();
+
+    $result = new TenantOnboardingResult(
+        $tenant->forceFill(['status' => TenantStatus::Active->value]),
+        new User,
+        new Domain,
+    );
+
+    $resumer = Mockery::mock(FailedTenantResumer::class);
+    $resumer->shouldReceive('execute')->once()->andReturn($result);
+    app()->instance(FailedTenantResumer::class, $resumer);
+
+    $failAuditUpdate = true;
+
+    PlatformAuditLog::updating(function (PlatformAuditLog $audit) use (&$failAuditUpdate): void {
+        if (! $failAuditUpdate) {
+            return;
+        }
+
+        $failAuditUpdate = false;
+
+        throw new RuntimeException('Simulated audit update failure.');
+    });
+
+    $actualResult = app(ResumeFailedTenantFromPlatform::class)->execute(
+        $ghost,
+        (string) $tenant->getKey(),
+        ['owner_email' => 'owner@example.test'],
+    );
+
+    expect($actualResult)->toBe($result);
+
+    $audit = PlatformAuditLog::query()
+        ->where('tenant_id', $tenant->getKey())
+        ->firstOrFail();
+
+    expect($audit->status)->toBe('started');
+    expect($audit->completed_at)->toBeNull();
+});
+
+test('audit update failure does not mask the original recovery exception', function () {
+    $ghost = platformAuditTestUser(ghost: true);
+    $tenant = platformAuditTestFailedTenant();
+
+    $resumer = Mockery::mock(FailedTenantResumer::class);
+    $resumer->shouldReceive('execute')
+        ->once()
+        ->andThrow(new RuntimeException('Original recovery failure.'));
+    app()->instance(FailedTenantResumer::class, $resumer);
+
+    $failAuditUpdate = true;
+
+    PlatformAuditLog::updating(function (PlatformAuditLog $audit) use (&$failAuditUpdate): void {
+        if (! $failAuditUpdate) {
+            return;
+        }
+
+        $failAuditUpdate = false;
+
+        throw new RuntimeException('Simulated audit update failure.');
+    });
+
+    expect(
+        fn () => app(ResumeFailedTenantFromPlatform::class)->execute(
+            $ghost,
+            (string) $tenant->getKey(),
+            ['owner_email' => 'owner@example.test'],
+        ),
+    )->toThrow(RuntimeException::class, 'Original recovery failure.');
+
+    $audit = PlatformAuditLog::query()
+        ->where('tenant_id', $tenant->getKey())
+        ->firstOrFail();
+
+    expect($audit->status)->toBe('started');
+    expect($audit->failure_code)->toBeNull();
+    expect($audit->completed_at)->toBeNull();
+});
+
+test('Ghost sees incomplete audit attempts as unconfirmed rather than active', function () {
+    $ghost = platformAuditTestUser(ghost: true);
+    $tenant = platformAuditTestFailedTenant();
+
+    PlatformAuditLog::query()->create([
+        'event' => 'tenant.resume',
+        'actor_id' => $ghost->getKey(),
+        'actor_name' => $ghost->name,
+        'actor_email' => $ghost->email,
+        'tenant_id' => $tenant->getKey(),
+        'tenant_name' => $tenant->name,
+        'tenant_slug' => $tenant->slug,
+        'status' => 'started',
+        'started_at' => now()->subHour(),
+    ]);
+
+    /** @var TestCase $testCase */
+    $testCase = $this;
+
+    $testCase->actingAs($ghost)
+        ->get(route('platform.tenants.failed'))
+        ->assertOk()
+        ->assertSee('Résultat non confirmé')
+        ->assertDontSee('En cours');
+});
+
+test('Ghost flags old incomplete audit attempts for manual review', function () {
+    config(['tenancy.platform_audit_stale_after_minutes' => 30]);
+
+    $ghost = platformAuditTestUser(ghost: true);
+    $tenant = platformAuditTestFailedTenant();
+
+    PlatformAuditLog::query()->create([
+        'event' => 'tenant.resume',
+        'actor_id' => $ghost->getKey(),
+        'actor_name' => $ghost->name,
+        'actor_email' => $ghost->email,
+        'tenant_id' => $tenant->getKey(),
+        'tenant_name' => $tenant->name,
+        'tenant_slug' => $tenant->slug,
+        'status' => 'started',
+        'started_at' => now()->subMinutes(31),
+    ]);
+
+    /** @var TestCase $testCase */
+    $testCase = $this;
+
+    $testCase->actingAs($ghost)
+        ->get(route('platform.tenants.failed'))
+        ->assertOk()
+        ->assertSee('Résultat non confirmé')
+        ->assertSee('À vérifier manuellement')
+        ->assertSee('Les tentatives concernées ne sont jamais relancées automatiquement');
+});
+
+test('Ghost does not flag recent incomplete audit attempts for manual review', function () {
+    config(['tenancy.platform_audit_stale_after_minutes' => 30]);
+
+    $ghost = platformAuditTestUser(ghost: true);
+    $tenant = platformAuditTestFailedTenant();
+
+    PlatformAuditLog::query()->create([
+        'event' => 'tenant.resume',
+        'actor_id' => $ghost->getKey(),
+        'actor_name' => $ghost->name,
+        'actor_email' => $ghost->email,
+        'tenant_id' => $tenant->getKey(),
+        'tenant_name' => $tenant->name,
+        'tenant_slug' => $tenant->slug,
+        'status' => 'started',
+        'started_at' => now()->subMinutes(5),
+    ]);
+
+    /** @var TestCase $testCase */
+    $testCase = $this;
+
+    $testCase->actingAs($ghost)
+        ->get(route('platform.tenants.failed'))
+        ->assertOk()
+        ->assertSee('Résultat non confirmé')
+        ->assertDontSee('À vérifier manuellement');
+});

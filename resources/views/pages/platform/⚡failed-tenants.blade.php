@@ -336,8 +336,11 @@ new #[Layout('layouts::app', ['title' => 'Reprise des tenants en échec'])] clas
         <div class="space-y-1">
             <flux:heading size="lg">Journal des opérations</flux:heading>
             <flux:subheading>
-                Les 20 dernières tentatives réalisées sur la plateforme.
-                Les détails sensibles des exceptions ne sont pas affichés ici.
+                Les 20 dernières tentatives de reprise sont affichées.
+                Les détails sensibles des exceptions ne sont pas affichés.
+                Une tentative sans résultat final depuis au moins
+                {{ config('tenancy.platform_audit_stale_after_minutes', 30) }} minutes
+                est signalée pour vérification manuelle. Les tentatives concernées ne sont jamais relancées automatiquement.
             </flux:subheading>
         </div>
 
@@ -367,10 +370,28 @@ new #[Layout('layouts::app', ['title' => 'Reprise des tenants en échec'])] clas
                                 <div class="font-medium">{{ $audit->tenant_name }}</div>
                                 <div class="text-xs text-zinc-500">{{ $audit->tenant_slug }}</div>
                             </td>
-                            <td class="px-4 py-3">{{ $audit->status }}</td>
+                            <td class="px-4 py-3">
+                                @if ($audit->status === 'started')
+                                    Résultat non confirmé
+                                    @if (
+                                        $audit->started_at !== null
+                                        && $audit->started_at->lte(
+                                            now()->subMinutes(
+                                                (int) config('tenancy.platform_audit_stale_after_minutes', 30),
+                                            ),
+                                        )
+                                    )
+                                        <div class="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                                            À vérifier manuellement
+                                        </div>
+                                    @endif
+                                @else
+                                    {{ $audit->status }}
+                                @endif
+                            </td>
                             <td class="px-4 py-3">{{ $audit->failure_code ?? '—' }}</td>
                             <td class="whitespace-nowrap px-4 py-3">
-                                {{ $audit->completed_at?->format('d/m/Y H:i:s') ?? 'En cours' }}
+                                {{ $audit->completed_at?->format('d/m/Y H:i:s') ?? '—' }}
                             </td>
                         </tr>
                     @empty

@@ -35,6 +35,7 @@ return [
     ],
 
     'land_domain' => env('LAND_DOMAIN', 'land.ci'),
+    'platform_audit_stale_after_minutes' => max(1, (int) env('PLATFORM_AUDIT_STALE_AFTER_MINUTES', 30)),
 
     /*
      * Slugs reserved for platform endpoints and infrastructure.
