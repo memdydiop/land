@@ -69,6 +69,29 @@ class TenancyServiceProvider extends ServiceProvider
 
     protected function bootEvents(): void
     {
+        $basePermissionCacheKey = (string) config('permission.cache.key');
+
+        Event::listen(
+            Events\TenancyBootstrapped::class,
+            static function (Events\TenancyBootstrapped $event) use ($basePermissionCacheKey): void {
+                config([
+                    'permission.cache.key' => $basePermissionCacheKey
+                        .'.tenant.'.$event->tenancy->tenant->getTenantKey(),
+                ]);
+
+                app(\Spatie\Permission\PermissionRegistrar::class)->initializeCache();
+            },
+        );
+
+        Event::listen(
+            Events\RevertedToCentralContext::class,
+            static function () use ($basePermissionCacheKey): void {
+                config(['permission.cache.key' => $basePermissionCacheKey]);
+
+                app(\Spatie\Permission\PermissionRegistrar::class)->initializeCache();
+            },
+        );
+
         Event::listen(
             Events\TenantCreated::class,
             JobPipeline::make([
