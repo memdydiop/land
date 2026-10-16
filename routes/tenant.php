@@ -20,4 +20,28 @@ Route::middleware([
     Route::middleware(['auth', 'verified'])->group(function () {
         Route::view('/dashboard', 'dashboard')->name('tenant.dashboard');
     });
+
+    Route::middleware(['auth'])->group(function () {
+        Route::redirect('/settings', '/settings/profile')
+            ->name('tenant.settings');
+
+        Route::livewire('/settings/profile', 'pages::settings.profile')
+            ->name('tenant.profile.edit');
+    });
+
+    Route::middleware(['auth', 'verified'])->group(function () {
+        Route::livewire('/settings/appearance', 'pages::settings.appearance')
+            ->name('tenant.appearance.edit');
+
+        Route::livewire('/settings/security', 'pages::settings.security')
+            ->middleware(['password.confirm'])
+            ->name('tenant.security.edit');
+    });
+
+    Route::get('/.well-known/passkey-endpoints', function () {
+        return response()->json([
+            'enroll' => route('tenant.security.edit'),
+            'manage' => route('tenant.security.edit'),
+        ]);
+    })->name('tenant.well-known.passkeys');
 });
