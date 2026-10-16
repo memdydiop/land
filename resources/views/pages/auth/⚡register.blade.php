@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use App\Actions\Tenancy\OnboardTenant;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Auth\Events\Registered;
 use Illuminate\Validation\Rules\Password;
 use Livewire\Component;
 use Livewire\Attributes\Layout;
@@ -53,10 +53,20 @@ new #[Layout('layouts::auth', ['title' => 'Créer mon organisation'])] class ext
             'currency' => $this->currency,
         ]);
 
-        Auth::login($result->owner);
+        $result->tenant->run(function () use ($result): void {
+            event(new Registered($result->owner));
+        });
+
+        $applicationUrl = parse_url((string) config('app.url')) ?: [];
+        $scheme = is_string($applicationUrl['scheme'] ?? null)
+            ? $applicationUrl['scheme']
+            : 'http';
+        $port = isset($applicationUrl['port'])
+            ? ':'.$applicationUrl['port']
+            : '';
 
         $this->redirect(
-            'https://'.$result->domain->domain.'/dashboard',
+            "{$scheme}://{$result->domain->domain}{$port}/login?registered=1",
             navigate: false,
         );
     }

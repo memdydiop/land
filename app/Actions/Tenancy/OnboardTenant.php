@@ -50,7 +50,6 @@ final class OnboardTenant
                     'name' => $validated['owner_name'],
                     'email' => $validated['owner_email'],
                     'password' => $validated['owner_password'],
-                    'email_verified_at' => now(),
                 ]);
 
                 $user->assignRole('owner');

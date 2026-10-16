@@ -40,12 +40,16 @@ class TenantOnboardingTest extends TenancyTestCase
         $this->assertSame('active', $result->tenant->status);
         $this->assertSame('tenant_'.Str::slug($slug, '_'), $result->tenant->schema_name);
         $this->assertSame($email, $result->owner->email);
+        $this->assertNull($result->owner->email_verified_at);
         $this->assertTrue(
             $result->tenant->run(
                 fn () => User::findOrFail($result->owner->id)->hasRole('owner')
             )
         );
-        $this->assertSame($slug.'.land.ci', $result->domain->domain);
+        $this->assertSame(
+            $slug.'.'.config('tenancy.land_domain', 'land.ci'),
+            $result->domain->domain,
+        );
         $this->assertTrue($result->domain->is_primary);
         $this->assertNotNull($result->domain->verified_at);
         $this->assertSame(1, Domain::where('tenant_id', $result->tenant->id)->count());

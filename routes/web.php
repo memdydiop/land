@@ -1,10 +1,17 @@
 <?php
 
+use App\Http\Controllers\VerifyTenantEmailController;
 use App\Http\Middleware\EnsureGhostPlatformAdmin;
 use Illuminate\Support\Facades\Route;
 
 Route::domain(config('tenancy.central_domains')[0])->group(function () {
     Route::view('/', 'landing')->name('home');
+
+    Route::get(
+        '/tenant/email/verify/{tenant}/{id}/{hash}',
+        VerifyTenantEmailController::class,
+    )->middleware(['signed', 'throttle:6,1'])
+        ->name('tenant.verification.verify');
 
     Route::livewire('/register', 'pages::auth.register')->name('register');
 

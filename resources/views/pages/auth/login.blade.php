@@ -1,5 +1,21 @@
 <x-layouts::auth :title="__('Log in')">
     <div class="flex flex-col gap-6">
+        @if (request()->query('registered') === '1')
+            <div role="status" class="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
+                Votre organisation a été créée. Consultez votre boîte e-mail pour confirmer votre adresse.
+            </div>
+        @endif
+
+        @if (request()->query('verified') === '1')
+            <div role="status" class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                Votre adresse e-mail est confirmée. Vous pouvez vous connecter.
+            </div>
+        @elseif (request()->query('verified') === 'already')
+            <div role="status" class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                Votre adresse e-mail est déjà confirmée. Vous pouvez vous connecter.
+            </div>
+        @endif
+
         <x-auth-header :title="__('Log in to your account')" :description="__('Enter your email and password below to log in')" />
 
         <!-- Session Status -->
