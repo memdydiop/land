@@ -3,12 +3,15 @@
 declare(strict_types=1);
 
 use App\Actions\Commercial\ConfirmReservation;
+use App\Actions\Commercial\ExpireReservation;
 use App\Enums\ReservationStatus;
+use App\Models\Reservation;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Tests\TenancyTestCase;
-use Illuminate\Database\QueryException;
 
 uses(TenancyTestCase::class);
 
@@ -91,7 +94,7 @@ function confirmReservationRecord(
     string $offerId,
     string $partyId,
     string $status = 'pending',
-    ?\DateTimeInterface $expiresAt = null,
+    ?DateTimeInterface $expiresAt = null,
 ): string {
     $id = (string) Str::ulid();
 
@@ -122,7 +125,7 @@ test('it confirms a valid pending reservation', function (): void {
         $reservationId = confirmReservationRecord($offerId, $partyId);
 
         $reservation = app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationId),
+            Reservation::query()->findOrFail($reservationId),
         );
 
         expect($reservation->status)->toBe(ReservationStatus::Confirmed)
@@ -147,7 +150,7 @@ test('it rejects a reservation that is not pending', function (): void {
         );
 
         expect(fn () => app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationId),
+            Reservation::query()->findOrFail($reservationId),
         ))->toThrow(ValidationException::class);
 
         expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
@@ -169,7 +172,7 @@ test('it rejects an expired reservation without changing its status', function (
         );
 
         expect(fn () => app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationId),
+            Reservation::query()->findOrFail($reservationId),
         ))->toThrow(ValidationException::class);
 
         expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
@@ -189,7 +192,7 @@ test('it rejects an inactive offer without changing the reservation', function (
         $reservationId = confirmReservationRecord($offerId, $partyId);
 
         expect(fn () => app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationId),
+            Reservation::query()->findOrFail($reservationId),
         ))->toThrow(ValidationException::class);
 
         expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
@@ -209,7 +212,7 @@ test('it rejects an offer whose validity has not started', function (): void {
         $reservationId = confirmReservationRecord($offerId, $partyId);
 
         expect(fn () => app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationId),
+            Reservation::query()->findOrFail($reservationId),
         ))->toThrow(ValidationException::class);
 
         expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
@@ -229,7 +232,7 @@ test('it rejects an expired offer', function (): void {
         $reservationId = confirmReservationRecord($offerId, $partyId);
 
         expect(fn () => app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationId),
+            Reservation::query()->findOrFail($reservationId),
         ))->toThrow(ValidationException::class);
 
         expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
@@ -249,7 +252,7 @@ test('it rejects an offer without items', function (): void {
         $reservationId = confirmReservationRecord($offerId, $partyId);
 
         expect(fn () => app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationId),
+            Reservation::query()->findOrFail($reservationId),
         ))->toThrow(ValidationException::class);
 
         expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
@@ -285,14 +288,14 @@ test('it rejects confirmation when another confirmed reservation holds the same 
         $reservationTwo = confirmReservationRecord($offerTwo, $buyerTwo);
 
         app(ConfirmReservation::class)->execute(
-            \App\Models\Reservation::query()->findOrFail($reservationOne),
+            Reservation::query()->findOrFail($reservationOne),
         );
 
         $exception = null;
 
         try {
             app(ConfirmReservation::class)->execute(
-                \App\Models\Reservation::query()->findOrFail($reservationTwo),
+                Reservation::query()->findOrFail($reservationTwo),
             );
         } catch (QueryException $caught) {
             $exception = $caught;
@@ -308,4 +311,169 @@ test('it rejects confirmation when another confirmed reservation holds the same 
             ->where('id', $reservationTwo)
             ->value('status'))->toBe('pending');
     });
+});
+
+test('it expires a pending reservation whose deadline has passed', function (): void {
+    $tenant = $this->testTenant('expire_reservation_success');
+
+    $tenant->run(function (): void {
+        $partyId = confirmReservationParty('Expiration buyer');
+        $offerId = confirmReservationOffer('OFFER-EXPIRE-SUCCESS');
+
+        $reservationId = confirmReservationRecord(
+            $offerId,
+            $partyId,
+            'pending',
+            now()->subSecond(),
+        );
+
+        $reservation = app(ExpireReservation::class)->execute(
+            Reservation::query()->findOrFail($reservationId),
+        );
+
+        expect($reservation->status)->toBe(ReservationStatus::Expired)
+            ->and(
+                DB::table('reservations')
+                    ->where('id', $reservationId)
+                    ->value('status'),
+            )->toBe('expired');
+    });
+});
+
+test('it rejects expiration before the deadline without changing the reservation', function (): void {
+    $tenant = $this->testTenant('expire_reservation_future');
+
+    $tenant->run(function (): void {
+        $partyId = confirmReservationParty('Expiration buyer');
+        $offerId = confirmReservationOffer('OFFER-EXPIRE-FUTURE');
+
+        $reservationId = confirmReservationRecord(
+            $offerId,
+            $partyId,
+            'pending',
+            now()->addDay(),
+        );
+
+        expect(fn () => app(ExpireReservation::class)->execute(
+            Reservation::query()->findOrFail($reservationId),
+        ))->toThrow(ValidationException::class);
+
+        expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
+            ->toBe('pending');
+    });
+});
+
+test('it rejects expiration when no deadline is defined', function (): void {
+    $tenant = $this->testTenant('expire_reservation_no_deadline');
+
+    $tenant->run(function (): void {
+        $partyId = confirmReservationParty('Expiration buyer');
+        $offerId = confirmReservationOffer('OFFER-EXPIRE-NO-DEADLINE');
+
+        $reservationId = confirmReservationRecord($offerId, $partyId);
+
+        DB::table('reservations')
+            ->where('id', $reservationId)
+            ->update(['expires_at' => null]);
+
+        expect(fn () => app(ExpireReservation::class)->execute(
+            Reservation::query()->findOrFail($reservationId),
+        ))->toThrow(ValidationException::class);
+
+        expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
+            ->toBe('pending');
+    });
+});
+
+test('it rejects expiration of a reservation that is no longer pending', function (): void {
+    $tenant = $this->testTenant('expire_reservation_cancelled');
+
+    $tenant->run(function (): void {
+        $partyId = confirmReservationParty('Expiration buyer');
+        $offerId = confirmReservationOffer('OFFER-EXPIRE-CANCELLED');
+
+        $reservationId = confirmReservationRecord(
+            $offerId,
+            $partyId,
+            'cancelled',
+            now()->subSecond(),
+        );
+
+        expect(fn () => app(ExpireReservation::class)->execute(
+            Reservation::query()->findOrFail($reservationId),
+        ))->toThrow(ValidationException::class);
+
+        expect(DB::table('reservations')->where('id', $reservationId)->value('status'))
+            ->toBe('cancelled');
+    });
+});
+
+test('expiration command expires due reservations and preserves future reservations', function (): void {
+    $tenant = $this->testTenant('expire_command_active');
+
+    $ids = $tenant->run(function (): array {
+        $partyId = confirmReservationParty('Command expiration buyer');
+        $offerId = confirmReservationOffer('COMMAND-EXPIRATION');
+
+        return [
+            'expired' => confirmReservationRecord(
+                $offerId,
+                $partyId,
+                'pending',
+                now()->subMinute(),
+            ),
+            'future' => confirmReservationRecord(
+                $offerId,
+                $partyId,
+                'pending',
+                now()->addDay(),
+            ),
+        ];
+    });
+
+    $exitCode = Artisan::call('reservations:expire');
+
+    $statuses = $tenant->run(
+        fn () => DB::table('reservations')
+            ->whereIn('id', array_values($ids))
+            ->pluck('status', 'id')
+            ->all(),
+    );
+
+    expect($exitCode)->toBe(0)
+        ->and($statuses[$ids['expired']])->toBe('expired')
+        ->and($statuses[$ids['future']])->toBe('pending')
+        ->and(tenancy()->initialized)->toBeFalse()
+        ->and(tenant())->toBeNull();
+});
+
+test('expiration command ignores suspended tenants', function (): void {
+    $tenant = $this->testTenant('expire_command_suspended');
+
+    $tenant->forceFill(['status' => 'suspended'])->save();
+
+    $reservationId = $tenant->run(function (): string {
+        $partyId = confirmReservationParty('Suspended tenant buyer');
+        $offerId = confirmReservationOffer('SUSPENDED-EXPIRATION');
+
+        return confirmReservationRecord(
+            $offerId,
+            $partyId,
+            'pending',
+            now()->subMinute(),
+        );
+    });
+
+    $exitCode = Artisan::call('reservations:expire');
+
+    $status = $tenant->run(
+        fn () => DB::table('reservations')
+            ->where('id', $reservationId)
+            ->value('status'),
+    );
+
+    expect($exitCode)->toBe(0)
+        ->and($status)->toBe('pending')
+        ->and(tenancy()->initialized)->toBeFalse()
+        ->and(tenant())->toBeNull();
 });
