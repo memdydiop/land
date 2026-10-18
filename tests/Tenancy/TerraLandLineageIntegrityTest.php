@@ -659,6 +659,303 @@ test('concurrent parcel lineage reassignment waits for reservation confirmation'
 
 
 
+test('reservation confirmation waits for committed subdivision lineage reassignment', function () {
+    $tenant = $this->testTenant('terra_subdivision_lineage_first');
+
+    $tenant->run(function () use ($tenant): void {
+        $fixture = terraLandLineageFixture();
+        $parcelId = $fixture['parcelId'];
+
+        $ilotId = DB::table('parcels')
+            ->where('id', $parcelId)
+            ->value('ilot_id');
+
+        $subdivisionId = DB::table('ilots')
+            ->where('id', $ilotId)
+            ->value('subdivision_id');
+
+        $operationId = DB::table('subdivisions')
+            ->where('id', $subdivisionId)
+            ->value('operation_id');
+
+        // The reservation must rely on the inferred subdivision lineage.
+        DB::table('parcels')
+            ->where('id', $parcelId)
+            ->update(['land_id' => null]);
+
+        $replacementLandId = (string) Str::ulid();
+
+        DB::table('lands')->insert([
+            'id' => $replacementLandId,
+            'reference' => 'LAND-'.Str::upper(Str::random(10)),
+            'name' => 'Replacement land committed before reservation',
+            'status' => 'acquired',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('operation_lands')->insert([
+            'id' => (string) Str::ulid(),
+            'operation_id' => $operationId,
+            'land_id' => $replacementLandId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $offerId = terraLandLineageOffer('SUBDIVISION-LINEAGE-FIRST');
+        terraLandLineageOfferItem($offerId, ['parcel_id' => $parcelId]);
+
+        $buyerId = terraLandLineageParty('Subdivision lineage first buyer');
+        $reservationId = terraLandLineageReservation($offerId, $buyerId);
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+        $schema = $tenant->schema_name;
+
+        $oldPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS value"
+        )->value;
+
+        $oldTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS value"
+        )->value;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$schema.',public']
+            );
+
+            // Transaction A changes the lineage and retains its locks.
+            $first->beginTransaction();
+
+            $first->table('subdivision_lands')
+                ->where('subdivision_id', $subdivisionId)
+                ->where('land_id', $fixture['landId'])
+                ->update([
+                    'land_id' => $replacementLandId,
+                    'updated_at' => now(),
+                ]);
+
+            // Transaction B must wait for A's overlapping advisory locks.
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockError = null;
+
+            try {
+                $second->table('reservations')
+                    ->where('id', $reservationId)
+                    ->update([
+                        'status' => 'confirmed',
+                        'updated_at' => now(),
+                    ]);
+            } catch (QueryException $exception) {
+                $lockError = $exception;
+            }
+
+            expect($lockError)->toBeInstanceOf(QueryException::class)
+                ->and($lockError->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            // The lineage change wins this ordering and becomes durable.
+            $first->commit();
+
+            // Retrying confirmation after the lineage commit should succeed.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $second->table('reservations')
+                ->where('id', $reservationId)
+                ->update([
+                    'status' => 'confirmed',
+                    'updated_at' => now(),
+                ]);
+
+            $second->commit();
+
+            expect(
+                $first->table('subdivision_lands')
+                    ->where('subdivision_id', $subdivisionId)
+                    ->where('land_id', $replacementLandId)
+                    ->exists()
+            )->toBeTrue()
+                ->and(
+                    $first->table('reservations')
+                        ->where('id', $reservationId)
+                        ->value('status')
+                )->toBe('confirmed')
+                ->and(
+                    $first->table('parcels')
+                        ->where('id', $parcelId)
+                        ->value('land_id')
+                )->toBeNull();
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$oldPath]
+            );
+
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS value",
+                [$oldTimeout]
+            );
+        }
+    });
+});
+
+
+test('concurrent subdivision lineage reassignment waits for reservation confirmation', function () {
+    $tenant = $this->testTenant('terra_subdivision_lineage_concurrent_guard');
+
+    $tenant->run(function () use ($tenant): void {
+        $fixture = terraLandLineageFixture();
+        $parcelId = $fixture['parcelId'];
+        $subdivisionId = DB::table('ilots')
+            ->where('id', DB::table('parcels')->where('id', $parcelId)->value('ilot_id'))
+            ->value('subdivision_id');
+
+        // Force the offer to rely on subdivision_lands for parcel lineage.
+        DB::table('parcels')
+            ->where('id', $parcelId)
+            ->update(['land_id' => null]);
+
+        $replacementLandId = (string) Str::ulid();
+        DB::table('lands')->insert([
+            'id' => $replacementLandId,
+            'reference' => 'LAND-'.Str::upper(Str::random(10)),
+            'name' => 'Concurrent subdivision replacement land',
+            'status' => 'acquired',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('operation_lands')->insert([
+            'id' => (string) Str::ulid(),
+            'operation_id' => DB::table('subdivisions')->where('id', $subdivisionId)->value('operation_id'),
+            'land_id' => $replacementLandId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $offerId = terraLandLineageOffer('CONCURRENT-SUBDIVISION-LINEAGE');
+        terraLandLineageOfferItem($offerId, ['parcel_id' => $parcelId]);
+        $buyerId = terraLandLineageParty('Concurrent subdivision lineage buyer');
+        $reservationId = terraLandLineageReservation($offerId, $buyerId);
+
+        $first = DB::connection();
+        $second = DB::connection('pgsql');
+        $schema = $tenant->schema_name;
+
+        $oldPath = $second->selectOne(
+            "SELECT current_setting('search_path') AS value"
+        )->value;
+        $oldTimeout = $second->selectOne(
+            "SELECT current_setting('lock_timeout') AS value"
+        )->value;
+
+        try {
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$schema.',public']
+            );
+
+            // A confirms and retains the advisory locks until commit.
+            $first->beginTransaction();
+            $first->table('reservations')
+                ->where('id', $reservationId)
+                ->update(['status' => 'confirmed', 'updated_at' => now()]);
+
+            // B attempts to change the inferred lineage while A still holds locks.
+            $second->statement("SET lock_timeout TO '250ms'");
+            $second->beginTransaction();
+
+            $lockError = null;
+            try {
+                $second->table('subdivision_lands')
+                    ->where('subdivision_id', $subdivisionId)
+                    ->where('land_id', $fixture['landId'])
+                    ->update(['land_id' => $replacementLandId, 'updated_at' => now()]);
+            } catch (QueryException $exception) {
+                $lockError = $exception;
+            }
+
+            expect($lockError)->toBeInstanceOf(QueryException::class)
+                ->and($lockError->errorInfo[0] ?? null)->toBe('55P03');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            $first->commit();
+
+            // A retry must now fail because the reservation is committed.
+            $second->statement("SET lock_timeout TO '0'");
+            $second->beginTransaction();
+
+            $conflictError = null;
+            try {
+                $second->table('subdivision_lands')
+                    ->where('subdivision_id', $subdivisionId)
+                    ->where('land_id', $fixture['landId'])
+                    ->update(['land_id' => $replacementLandId, 'updated_at' => now()]);
+            } catch (QueryException $exception) {
+                $conflictError = $exception;
+            }
+
+            expect($conflictError)->toBeInstanceOf(QueryException::class)
+                ->and($conflictError->errorInfo[0] ?? null)->toBe('55006');
+
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+
+            expect(
+                $first->table('subdivision_lands')
+                    ->where('subdivision_id', $subdivisionId)
+                    ->where('land_id', $fixture['landId'])
+                    ->exists()
+            )->toBeTrue()
+                ->and(
+                    $first->table('reservations')
+                        ->where('id', $reservationId)
+                        ->value('status')
+                )->toBe('confirmed')
+                ->and(
+                    $first->table('parcels')->where('id', $parcelId)->value('land_id')
+                )->toBeNull();
+        } finally {
+            if ($second->transactionLevel() > 0) {
+                $second->rollBack();
+            }
+            if ($first->transactionLevel() > 0) {
+                $first->rollBack();
+            }
+
+            $second->selectOne(
+                "SELECT set_config('search_path', ?, false) AS value",
+                [$oldPath]
+            );
+            $second->selectOne(
+                "SELECT set_config('lock_timeout', ?, false) AS value",
+                [$oldTimeout]
+            );
+        }
+    });
+});
+
+
 test('subdivision land lineage cannot change after parcel reservation confirmation', function () {
     $tenant = $this->testTenant('terra_subdivision_land_lineage_freeze');
 
