@@ -107,7 +107,7 @@ class TenancyServiceProvider extends ServiceProvider
 
         Event::listen(
             Events\TenancyInitialized::class,
-            Listeners\BootstrapTenancy::class,
+            \App\Tenancy\BootstrapTenancy::class,
         );
 
         Event::listen(

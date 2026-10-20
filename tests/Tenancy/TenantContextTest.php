@@ -60,6 +60,46 @@ test('nested tenant run restores previous tenant when callback throws', function
 });
 
 
+test('failed tenant bootstrap restores central context when schema is missing', function () {
+    $tenant = $this->testTenant('missing_schema_context');
+    $schema = $tenant->schema_name;
+    $originalEnvironment = app()->environment();
+
+    DB::connection('pgsql')->statement(
+        'DROP SCHEMA IF EXISTS "'.$schema.'" CASCADE'
+    );
+
+    $this->app->instance('env', 'local');
+
+    try {
+        expect(fn () => $tenant->run(fn () => null))
+            ->toThrow(
+                \Stancl\Tenancy\Exceptions\TenantDatabaseDoesNotExistException::class
+            );
+
+        expect(tenancy()->initialized)->toBeFalse()
+            ->and(tenant())->toBeNull()
+            ->and(
+                DB::connection('pgsql')->selectOne(
+                    'SELECT current_schema() AS schema'
+                )->schema
+            )->toBe('testing');
+    } finally {
+        if (tenancy()->initialized) {
+            tenancy()->end();
+        }
+
+        $this->app->instance('env', $originalEnvironment);
+
+        $tenant->delete();
+
+        DB::connection('pgsql')->statement(
+            'DROP SCHEMA IF EXISTS "'.$schema.'" CASCADE'
+        );
+    }
+});
+
+
 test('tenant context switches search path and restores central context', function () {
     $tenant = $this->testTenant('context');
 
